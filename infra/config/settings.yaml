@@ -1,2 +1,17 @@
 database:
   host: localhost
+# infra/config/settings.yaml
+# 已有配置...
+
+# 新增 Tushare 配置
+tushare:
+  token: ${TUSHARE_TOKEN}  # 从环境变量读取，支持 .env
+  request_delay: 1.0
+  max_retries: 5
+  cache_expiry_days: 1
+
+# 数据获取配置
+data:
+  market: CN
+  batch_start_date: 2020-01-01
+  batch_end_date: null  # 默认当前日期

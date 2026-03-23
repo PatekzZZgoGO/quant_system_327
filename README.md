@@ -13,6 +13,6 @@
 
 详见 `docs/architecture.md`。
 
-## 开发指南
+## 命令行
 
-请参考 `docs/development_guide.md`。
+请参考 `docs/CMD.md`。
