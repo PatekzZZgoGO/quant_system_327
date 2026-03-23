@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 数据与运行输出
+data/datasets/raw/
+data/datasets/processed/
+data/datasets/cache/
+backtest/results/runs/*/
+!backtest/results/runs/.gitkeep
+logs/
+live/
+cache/
+*.log
+
+# 环境变量
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/

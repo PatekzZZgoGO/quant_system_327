@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant_system"
+version = "0.1.0"
+description = "A scalable, reusable, cross-platform quantitative trading system"
+authors = [{name = "Your Name", email = "you@example.com"}]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=1.5.0",
+    "numpy>=1.24.0",
+    "pyarrow>=12.0.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "black>=23.0.0", "isort>=5.12.0", "pre-commit>=3.0.0"]
+ml = ["scikit-learn>=1.2.0", "xgboost>=1.7.0", "lightgbm>=3.3.0"]
+live = ["redis>=4.5.0", "sqlalchemy>=2.0.0", "prometheus-client>=0.17.0"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
