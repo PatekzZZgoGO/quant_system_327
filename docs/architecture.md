@@ -190,7 +190,12 @@ quant_system/
 │   ├── run_jq.py                          # 启动聚宽运行（通过 adapter 映射）
 │   ├── run_backtest.py                    # 启动本地回测（指定策略、参数、时间范围）
 │   ├── run_live.py                        # 启动实盘（从配置文件加载券商接口）
-│   └── update_data.py                     # 数据更新任务（拉取最新行情、因子）
+│   ├── commands/
+│        ├── rate_limiter/     #限流器   
+│        │       ├──advanced_rate_limiter.py
+│        └── run.py    #总CIL
+│
+│
 │
 ├── tests/                                 # 单元测试（与模块结构对应，使用 pytest）
 │   ├── conftest.py                        # 共享 fixtures，如测试数据、模拟引擎

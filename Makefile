@@ -15,7 +15,7 @@ format:
 	isort .
 
 update-data:
-	python scripts/update_data.py
+	python scripts/run.py data update
 
 backtest:
 	python scripts/run_backtest.py

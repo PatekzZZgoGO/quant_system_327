@@ -23,13 +23,15 @@ data/datasets/processed/
 data/datasets/cache/
 backtest/results/runs/*/
 !backtest/results/runs/.gitkeep
-# logs/
-# live/
-# cache/
-# *.log
+logs/
+live/
+cache/
+*.log
 
-# # 环境变量
-# .env
+# 环境变量
+.env
+
+rate_limit_state.json
 
 # OS
 .DS_Store

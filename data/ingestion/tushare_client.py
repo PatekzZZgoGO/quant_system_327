@@ -14,6 +14,7 @@ from collections import deque
 from typing import List, Dict, Optional, Tuple
 from threading import Lock
 from pathlib import Path
+from data.ingestion.rate_limiter.advanced_rate_limiter import AdvancedRateLimiter
 
 import pandas as pd
 
@@ -89,7 +90,10 @@ class ResilientTushareFetcher:
         self.pro = pro_api
         self.max_attempts = max_attempts
         self.base_delay = base_delay
-        self.rate_limiter = SmartRateLimiter()
+        self.rate_limiter = AdvancedRateLimiter(
+            max_calls_per_minute=100,   # 保守值（建议先低一点）
+            max_calls_per_day=8000      # 根据你积分调
+        )
 
     def _validate_data(self, df: pd.DataFrame, required_columns: List[str]) -> bool:
         if df is None or len(df) == 0:
@@ -97,50 +101,196 @@ class ResilientTushareFetcher:
         return all(col in df.columns for col in required_columns)
 
     def fetch_daily_with_retry(self, ts_code: str, start_date: str, end_date: str,
-                               max_attempts: int = None) -> Optional[pd.DataFrame]:
+                            max_attempts: int = None) -> Optional[pd.DataFrame]:
+        """
+        获取日线数据（生产级增强版）
+
+        🔥 核心能力：
+        - 强制类型安全（避免 int / numpy 类型污染）
+        - 智能限流（分钟 + 每日 + 随机延迟）
+        - 风控检测（空数据识别 = 高概率被限流）
+        - 自动降速（连续错误 / 空数据）
+        - 多层重试机制（指数退避）
+
+        ⚠️ 为什么要这么复杂？
+        因为 Tushare 限制不是简单“频率”，而是：
+        - 请求速率
+        - 请求总量
+        - 行为模式（连续抓全市场）
+
+        👉 这个函数就是专门对抗这些限制的
+        """
+
         max_attempts = max_attempts or self.max_attempts
         required_columns = ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol']
 
+        # =========================
+        # ✅ 强制类型清洗（极其关键）
+        # =========================
+        ts_code = str(ts_code).strip()
+        start_date = str(start_date).replace('-', '')
+        end_date = str(end_date).replace('-', '')
+
         for attempt in range(max_attempts):
             try:
+                # =========================
+                # 🧠 专业限流器（核心）
+                # =========================
                 self.rate_limiter.wait()
-                df = self.pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+
+                # debug（只打印第一次，避免刷屏）
+                if attempt == 0:
+                    logger.debug(
+                        f"[Tushare] 请求参数: {ts_code}, {start_date}, {end_date}"
+                    )
+
+                # =========================
+                # 📡 实际 API 调用
+                # =========================
+                df = self.pro.daily(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                # =========================
+                # 🚨 风控检测（重点！！！）
+                # =========================
+                if df is None or df.empty:
+                    # 👉 很多时候不是“没数据”，而是“被限流”
+                    self.rate_limiter.record_empty()
+
+                    raise ValueError("返回空数据（可能触发Tushare限流/风控）")
+
+                # =========================
+                # ✅ 数据结构校验
+                # =========================
                 if not self._validate_data(df, required_columns):
-                    raise ValueError("返回数据不完整或格式错误")
+                    self.rate_limiter.record_error()
+                    raise ValueError("返回数据不完整或字段缺失")
+
+                # =========================
+                # 🎯 成功（重置风控计数）
+                # =========================
+                self.rate_limiter.record_success()
+
                 return df
+
             except Exception as e:
+                self.rate_limiter.record_error()
                 error_msg = str(e)
-                if '权限' in error_msg or '积分' in error_msg:
-                    logger.error(f"权限错误，停止重试：{error_msg}")
+
+                # =========================
+                # 🔍 Debug：打印真实类型（查隐藏 bug）
+                # =========================
+                logger.error(
+                    f"[DEBUG] ts_code={ts_code} ({type(ts_code)}), "
+                    f"start_date={start_date} ({type(start_date)}), "
+                    f"end_date={end_date} ({type(end_date)})"
+                )
+
+                # =========================
+                # 🚨 权限类错误（直接停止）
+                # =========================
+                if '权限' in error_msg or '积分' in error_msg or 'token' in error_msg.lower():
+                    logger.error(f"🚫 权限/Token错误，停止重试：{error_msg}")
                     return None
+
+                # =========================
+                # 📉 风控记录（错误）
+                # =========================
+                self.rate_limiter.record_error()
+
+                # =========================
+                # 🔁 指数退避重试
+                # =========================
                 if attempt < max_attempts - 1:
-                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0, 1)
-                    logger.warning(f"第{attempt+1}次尝试失败，等待{wait_time:.1f}秒后重试... 错误：{error_msg[:60]}")
+                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0.5, 1.5)
+
+                    logger.warning(
+                        f"⚠️ 第{attempt+1}次失败，{wait_time:.1f}s后重试 | "
+                        f"错误: {error_msg[:80]}"
+                    )
+
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"所有{max_attempts}次尝试失败：{error_msg}")
+                    logger.error(f"❌ 所有{max_attempts}次尝试失败：{error_msg}")
                     return None
+
         return None
 
     def fetch_stock_basic_with_retry(self, max_attempts: int = 3) -> Optional[pd.DataFrame]:
+        """
+        获取股票基础列表（增强版：限流 + 风控检测 + 类型修复）
+
+        🔥 升级点：
+        - 强制限流（统一入口）
+        - 自动识别被风控（空数据/异常返回）
+        - 指数退避（防封IP）
+        - 参数类型防污染
+        """
+
         for attempt in range(max_attempts):
             try:
+                # ✅ 统一限流入口（非常关键）
                 self.rate_limiter.wait()
+
+                # ✅ 防止隐藏类型污染（极重要）
+                exchange = ''
+                list_status = 'L'
+                fields = 'ts_code,symbol,name,area,industry,list_date'
+
+                # ✅ debug（首轮打印）
+                if attempt == 0:
+                    logger.debug("[Tushare] 获取股票列表请求发送")
+
                 df = self.pro.stock_basic(
-                    exchange='',
-                    list_status='L',
-                    fields='ts_code,symbol,name,area,industry,list_date'
+                    exchange=exchange,
+                    list_status=list_status,
+                    fields=fields
                 )
-                if df is not None and len(df) > 0:
-                    return df
+
+                # =========================
+                # 🚨 风控检测（核心升级）
+                # =========================
+                if df is None:
+                    raise ValueError("返回None（疑似风控/限流）")
+
+                if len(df) == 0:
+                    raise ValueError("返回空数据（疑似被限流）")
+
+                if 'ts_code' not in df.columns:
+                    raise ValueError("字段异常（疑似接口被降级）")
+
+                # ✅ 成功
+                logger.info(f"✅ 获取股票列表成功：{len(df)} 条")
+                return df
+
             except Exception as e:
+                error_msg = str(e)
+
+                logger.error(f"[StockBasic ERROR] {error_msg}")
+
+                # 🚨 权限错误直接终止
+                if '权限' in error_msg or '积分' in error_msg or 'token' in error_msg:
+                    logger.error("❌ 权限/Token错误，停止重试")
+                    return None
+
+                # =========================
+                # 🚀 智能退避（核心）
+                # =========================
                 if attempt < max_attempts - 1:
-                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0, 1)
-                    logger.warning(f"获取股票列表失败，等待{wait_time:.1f}秒后重试...")
+                    wait_time = min(60, (2 ** attempt) + random.uniform(1, 3))
+
+                    logger.warning(
+                        f"⚠️ 第{attempt+1}次失败 | {wait_time:.1f}s后重试 | 原因: {error_msg[:80]}"
+                    )
+
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"获取股票列表失败：{str(e)}")
+                    logger.error(f"❌ 获取股票列表最终失败：{error_msg}")
                     return None
+
         return None
 
 
@@ -360,6 +510,12 @@ class TushareDataFetcher:
         if end_date is None:
             end_date = datetime.now().strftime('%Y-%m-%d')
 
+        # ⚠️ 防御性编程：确保 start_date / end_date 一定是字符串
+        # 很多配置文件（yaml/json）会把 20200101 解析成 int，必须强转
+        start_date = str(start_date)
+        end_date = str(end_date)
+
+        # 去掉 '-'，统一转为 tushare 需要的 YYYYMMDD 格式
         start_fmt = start_date.replace('-', '')
         end_fmt = end_date.replace('-', '')
 
@@ -410,15 +566,48 @@ class TushareDataFetcher:
         return df
 
     def _fetch_from_api(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        从 Tushare API 获取数据（带完整数据清洗）
+
+        🔥 关键修复：
+        - 强制 symbol 为字符串
+        - 强制日期格式 YYYYMMDD
+        - 防止 None / int / numpy 类型污染
+        """
+
         if not self.tushare_available or self.fetcher is None:
             return pd.DataFrame()
+
         try:
-            df = self.fetcher.fetch_daily_with_retry(symbol, start_date, end_date)
+            # ✅ 强制 symbol 类型
+            symbol = str(symbol).strip()
+
+            # ✅ 日期格式统一
+            start_date = str(start_date).replace('-', '')
+            end_date = str(end_date).replace('-', '')
+
+            # ✅ 防御：长度校验
+            if len(start_date) != 8 or len(end_date) != 8:
+                raise ValueError(f"日期格式错误: {start_date}, {end_date}")
+
+            # ✅ 防御：非法 symbol
+            if '.' not in symbol:
+                raise ValueError(f"非法股票代码: {symbol}")
+
+            df = self.fetcher.fetch_daily_with_retry(
+                ts_code=symbol,
+                start_date=start_date,
+                end_date=end_date
+            )
+
             if df is None or df.empty:
                 return pd.DataFrame()
+
             df = self._clean_data(df, symbol)
+
             print(f"✅ 成功获取 {symbol} 共 {len(df)} 条记录")
             return df
+
         except Exception as e:
             self.monitor.log_error(symbol, str(e))
             print(f"❌ 获取失败：{str(e)[:80]}")
