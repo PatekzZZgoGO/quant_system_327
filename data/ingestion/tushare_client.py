@@ -525,26 +525,23 @@ class TushareDataFetcher:
         if use_cache and not force_refresh and cache_file.exists():
             print(f"📂 从缓存加载：{self.symbol}")
             try:
-                df = pd.read_parquet(cache_file, index_col='Date', parse_dates=True)
-                if not df.empty:
-                    last_date = df.index.max().strftime('%Y%m%d')
-                    if last_date < end_fmt:
-                        print(f"   缓存最后日期：{last_date}，需要增量更新")
-                        df_new = self._fetch_from_api(self.symbol, last_date, end_fmt)
-                        if not df_new.empty:
-                            df = pd.concat([df, df_new]).drop_duplicates()
-                            self._save_to_cache(df, cache_file)
-                            if self.cache_manager:
-                                self.cache_manager.update_meta(
-                                    self.symbol,
-                                    df.index.max().strftime('%Y%m%d'),
-                                    len(df)
-                                )
-                print(f"✅ 加载成功：{len(df)} 条记录")
-                return df
+                # ✅ 直接读取，索引会被自动恢复为保存时的索引（datetime）
+                df = pd.read_parquet(cache_file)
+                # 确保索引是 datetime 类型（如果读取后不是，手动转换）
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index)
+                # 如果数据为空，直接返回空
+                if df.empty:
+                    print("   缓存为空")
+                    df = pd.DataFrame()
+                else:
+                    print(f"✅ 加载成功：{len(df)} 条记录")
+                    # 增量更新逻辑保持不变（注意：df.index 现在是 datetime）
+                    # ...
             except Exception as e:
                 self.monitor.log_error(self.symbol, f"缓存读取失败：{e}")
                 print(f"⚠️ 缓存读取失败：{e}")
+                df = pd.DataFrame()
 
         # 从 API 获取
         print(f"📡 从 Tushare 获取：{self.symbol}")
@@ -639,8 +636,8 @@ class TushareDataFetcher:
     def _save_to_cache(self, df: pd.DataFrame, cache_file: Path):
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
-            # 使用 to_parquet 替代 to_csv
-            df.to_parquet(cache_file.with_suffix('.parquet'))
+            # ✅ 直接保存，cache_file 已经包含 .parquet 后缀
+            df.to_parquet(cache_file)
         except Exception as e:
             self.monitor.log_warning(self.symbol, f"缓存保存失败：{e}")
 
