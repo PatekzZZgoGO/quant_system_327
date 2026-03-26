@@ -2,162 +2,229 @@ import sys
 from pathlib import Path
 import argparse
 import subprocess
+import importlib
 
-# 修复导入路径
+# 修复路径
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.commands.data import register_data_commands
 
-# ========== 命令树定义（需与 register_data_commands 注册的命令保持一致） ==========
+# =========================
+# 🧩 UI 命令树（仅展示，不存参数）
+# =========================
 COMMAND_TREE = {
     "data": {
-        "help": "数据管理相关命令",
+        "help": "数据管理",
         "subcommands": {
             "update": {
                 "help": "更新数据",
                 "subcommands": {
                     "stocks": {
-                        "help": "更新股票数据",
-                        "options": [
-                            {"name": "--limit", "type": int, "help": "限制更新数量",
-                             "prompt": "请输入限制数量（可选，直接回车跳过）: "},
-                            {"name": "--force-refresh", "action": "store_true", "help": "强制刷新",
-                             "prompt": "是否强制刷新？(y/n): ", "convert": lambda x: x.lower() == 'y'},
-                            {"name": "--start-date", "type": str, "help": "起始日期",
-                             "prompt": "起始日期 (YYYY-MM-DD，可选): "},
-                            {"name": "--end-date", "type": str, "help": "结束日期",
-                             "prompt": "结束日期 (YYYY-MM-DD，可选): "},
-                            {"name": "--resume", "action": "store_true", "help": "断点续传",
-                             "prompt": "是否启用断点续传？(y/n): ", "convert": lambda x: x.lower() == 'y'}
-                        ]
+                        "help": "更新股票数据"
                     }
                 }
             }
         }
+    },
+    "factor": {
+        "help": "因子模块",
+        "subcommands": {
+            "run": {
+                "help": "运行因子选股"
+            }
+        }
     }
-    # 如果有其他模块，可继续添加
 }
 
-# ========== 交互函数 ==========
+
+# =========================
+# 🚀 自动注册 commands（插件系统）
+# =========================
+def auto_register_commands(subparsers):
+    commands_path = PROJECT_ROOT / "scripts" / "commands"
+
+    for file in commands_path.glob("*.py"):
+        if file.name.startswith("_"):
+            continue
+
+        module_name = f"scripts.commands.{file.stem}"
+
+        try:
+            module = importlib.import_module(module_name)
+
+            if hasattr(module, "register"):
+                module.register(subparsers)
+                print(f"[✔] Loaded command: {file.stem}")
+            else:
+                print(f"[WARN] {file.stem} has no register()")
+
+        except Exception as e:
+            print(f"[ERROR] Failed loading {file.stem}: {e}")
+
+
+# =========================
+# 🧠 UI 选择命令（只负责路径）
+# =========================
 def choose_command(commands, path=None):
     if path is None:
         path = []
 
-    # 显示当前路径
-    if path:
-        print(f"\n当前路径: {' '.join(path)}")
-    else:
-        print("\n当前路径: (根)")
+    print("\n当前路径:", " ".join(path) if path else "(root)")
 
-    subcommands = list(commands.keys())
-    if not subcommands:
-        # 叶子节点，返回路径和空选项（后续收集选项）
-        return path, {}
+    keys = list(commands.keys())
 
-    # 列出子命令
-    print("可用的子命令:")
-    for i, cmd in enumerate(subcommands, 1):
-        help_text = commands[cmd].get("help", "")
-        print(f"  {i}. {cmd} - {help_text}")
-    print("  q. 退出")
+    for i, k in enumerate(keys, 1):
+        print(f"{i}. {k} - {commands[k].get('help', '')}")
+    print("q. 退出")
 
-    choice = input("请选择命令编号或名称: ").strip()
-    if choice.lower() == 'q':
+    choice = input("选择命令: ").strip()
+
+    if choice == 'q':
         sys.exit(0)
 
-    # 解析选择
     if choice.isdigit():
         idx = int(choice) - 1
-        if 0 <= idx < len(subcommands):
-            cmd = subcommands[idx]
-        else:
-            print("无效编号，请重新选择。")
+        if idx < 0 or idx >= len(keys):
             return choose_command(commands, path)
+        key = keys[idx]
     else:
-        if choice in subcommands:
-            cmd = choice
-        else:
-            print(f"无效命令名 '{choice}'，请重新选择。")
+        if choice not in keys:
             return choose_command(commands, path)
+        key = choice
 
-    node = commands[cmd]
+    node = commands[key]
+
     if "subcommands" in node:
-        # 继续深入
-        return choose_command(node["subcommands"], path + [cmd])
+        return choose_command(node["subcommands"], path + [key])
     else:
-        # 叶子节点，收集选项
-        options = node.get("options", [])
-        option_values = {}
-        for opt in options:
-            prompt_msg = opt.get("prompt", f"请输入 {opt['name']}: ")
-            user_input = input(prompt_msg).strip()
-            if not user_input:
-                continue
-            if opt.get("action") == "store_true":
-                # 布尔选项
-                if "convert" in opt:
-                    value = opt["convert"](user_input)
-                else:
-                    value = user_input.lower() in ('y', 'yes', 'true', '1')
-                if value:
-                    option_values[opt["name"]] = True
-            else:
-                # 普通选项
-                if opt.get("type") == int:
-                    try:
-                        value = int(user_input)
-                        option_values[opt["name"]] = value
-                    except ValueError:
-                        print("输入无效，跳过该选项。")
-                        continue
-                else:
-                    option_values[opt["name"]] = user_input
-        return path + [cmd], option_values
+        return path + [key]
 
+
+# =========================
+# 🚀 交互入口（UI + CLI 参数）
+# =========================
 def interactive_main():
-    cmd_path, opt_values = choose_command(COMMAND_TREE)
+    cmd_path = choose_command(COMMAND_TREE)
+
     if not cmd_path:
         return
 
-    # 构造完整的命令参数列表
-    script_path = Path(__file__).resolve()
-    args_list = [sys.executable, str(script_path)] + cmd_path
-    for key, value in opt_values.items():
-        if isinstance(value, bool):
-            if value:
-                args_list.append(key)
+    print(f"\n👉 已选择命令: {' '.join(cmd_path)}")
+
+    # =========================
+    # 🧠 构建 parser（关键）
+    # =========================
+    parser = argparse.ArgumentParser("Quant System CLI")
+    subparsers = parser.add_subparsers(dest="module")
+
+    auto_register_commands(subparsers)
+
+    # =========================
+    # 🧠 找到对应子 parser
+    # =========================
+    current_parser = parser
+
+    for cmd in cmd_path:
+        actions = [
+            a for a in current_parser._actions
+            if isinstance(a, argparse._SubParsersAction)
+        ]
+
+        if not actions:
+            break
+
+        subparser_action = actions[0]
+
+        if cmd in subparser_action.choices:
+            current_parser = subparser_action.choices[cmd]
         else:
-            args_list.append(key)
-            args_list.append(str(value))
+            break
 
-    print(f"\n即将执行: {' '.join(args_list)}")
+    # =========================
+    # 🧠 读取参数定义并交互输入
+    # =========================
+    args_list = cmd_path.copy()
+
+    for action in current_parser._actions:
+        if not action.option_strings:
+            continue
+
+        arg_name = action.option_strings[0]
+
+        # 👉 跳过 help
+        if arg_name in ("-h", "--help"):
+            continue
+
+        default = action.default
+        required = action.required
+
+        # =========================
+        # 🧠 构造 prompt
+        # =========================
+        if required:
+            prompt = f"请输入 {arg_name} (必填): "
+        else:
+            prompt = f"请输入 {arg_name} [默认={default}]: "
+
+        user_input = input(prompt).strip()
+
+        if not user_input:
+            if required:
+                print("❌ 必填参数不能为空")
+                return
+            else:
+                continue
+
+        # =========================
+        # 类型转换
+        # =========================
+        if action.type == int:
+            try:
+                user_input = int(user_input)
+            except ValueError:
+                print("❌ 输入必须是整数")
+                return
+
+        args_list.append(arg_name)
+        args_list.append(str(user_input))
+
+    # =========================
+    # 🚀 执行
+    # =========================
+    cmd = [sys.executable, str(Path(__file__).resolve())] + args_list
+
+    print(f"\n🚀 即将执行:\n{' '.join(cmd)}")
+
     confirm = input("确认执行？(y/n): ").strip().lower()
-    if confirm == 'y':
-        try:
-            subprocess.run(args_list, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"命令执行失败，返回码: {e.returncode}")
-    else:
-        print("已取消。")
 
-# ========== 主入口 ==========
+    if confirm == 'y':
+        subprocess.run(cmd)
+    else:
+        print("已取消")
+
+# =========================
+# 🧠 主入口（CLI）
+# =========================
 def main():
-    # 无参数时进入交互模式
+    # 👉 无参数 → UI模式
     if len(sys.argv) == 1:
         interactive_main()
         return
 
-    # 正常解析命令行参数
     parser = argparse.ArgumentParser("Quant System CLI")
+
     subparsers = parser.add_subparsers(dest="module")
-    register_data_commands(subparsers)
+
+    # 👉 自动加载所有 commands
+    auto_register_commands(subparsers)
 
     args = parser.parse_args()
+
     if hasattr(args, "func"):
         args.func(args)
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

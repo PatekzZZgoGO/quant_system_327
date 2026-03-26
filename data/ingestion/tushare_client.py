@@ -219,6 +219,57 @@ class ResilientTushareFetcher:
 
         return None
 
+    def fetch_daily_basic_with_retry(
+        self,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+        max_attempts: int = None
+    ) -> Optional[pd.DataFrame]:
+
+        max_attempts = max_attempts or self.max_attempts
+
+        ts_code = str(ts_code).strip()
+        start_date = str(start_date).replace('-', '')
+        end_date = str(end_date).replace('-', '')
+
+        required_columns = ['ts_code', 'trade_date', 'total_mv']
+
+        for attempt in range(max_attempts):
+            try:
+                self.rate_limiter.wait()
+
+                df = self.pro.daily_basic(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    fields='ts_code,trade_date,total_mv,circ_mv,turnover_rate,pe'
+                )
+
+                # 🚨 风控检测
+                if df is None or df.empty:
+                    self.rate_limiter.record_empty()
+                    raise ValueError("daily_basic 返回空数据（可能限流）")
+
+                if not all(col in df.columns for col in required_columns):
+                    self.rate_limiter.record_error()
+                    raise ValueError("daily_basic 字段缺失")
+
+                self.rate_limiter.record_success()
+                return df
+
+            except Exception as e:
+                self.rate_limiter.record_error()
+
+                if attempt < max_attempts - 1:
+                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0.5, 1.5)
+                    logger.warning(f"[daily_basic] 第{attempt+1}次失败，{wait_time:.1f}s后重试: {e}")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"[daily_basic] 最终失败: {e}")
+                    return None
+
+        return None
     def fetch_stock_basic_with_retry(self, max_attempts: int = 3) -> Optional[pd.DataFrame]:
         """
         获取股票基础列表（增强版：限流 + 风控检测 + 类型修复）
@@ -562,6 +613,117 @@ class TushareDataFetcher:
         self.monitor.log_success(self.symbol, len(df), duration)
         return df
 
+    def fetch_daily_basic(
+        self,
+        start_date: str,
+        end_date: str,
+        use_cache: bool = True,
+        force_refresh: bool = False
+    ) -> pd.DataFrame:
+
+        if not self.symbol:
+            raise ValueError("请先设置股票代码")
+
+        start_fmt = str(start_date).replace('-', '')
+        end_fmt = str(end_date).replace('-', '')
+
+        cache_file = self._get_basic_cache_path(self.symbol)
+
+        # =========================
+        # 📂 1. 从缓存加载
+        # =========================
+        if use_cache and not force_refresh and cache_file.exists():
+            try:
+                df = pd.read_parquet(cache_file)
+
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index)
+
+                if not df.empty:
+                    print(f"📂 daily_basic缓存加载成功: {self.symbol} ({len(df)}条)")
+                    return df
+
+            except Exception as e:
+                self.monitor.log_warning(self.symbol, f"basic缓存读取失败: {e}")
+
+        # =========================
+        # 📡 2. 从 API 获取
+        # =========================
+        print(f"📡 获取 daily_basic: {self.symbol}")
+
+        start_time = time.time()
+
+        df = self.fetcher.fetch_daily_basic_with_retry(
+            ts_code=self.symbol,
+            start_date=start_fmt,
+            end_date=end_fmt
+        )
+
+        duration = time.time() - start_time
+
+        if df is None or df.empty:
+            self.monitor.log_error(self.symbol, "daily_basic 获取失败")
+            return pd.DataFrame()
+
+        # =========================
+        # 🧹 3. 数据清洗
+        # =========================
+        df = self._clean_daily_basic(df)
+
+        # =========================
+        # ⚠️ 4. 单位修复（非常重要）
+        # =========================
+        if 'TotalMV' in df.columns:
+            df['TotalMV'] = df['TotalMV'] * 10000  # 万元 → 元
+
+        # =========================
+        # 🏷️ 5. 加 symbol（统一格式）
+        # =========================
+        df['Symbol'] = self.symbol
+
+        # =========================
+        # 💾 6. 保存缓存
+        # =========================
+        if use_cache:
+            try:
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(cache_file)
+            except Exception as e:
+                self.monitor.log_warning(self.symbol, f"basic缓存保存失败: {e}")
+
+        # =========================
+        # 📊 7. 监控记录
+        # =========================
+        self.monitor.log_success(self.symbol, len(df), duration)
+
+        return df
+
+    def _clean_daily_basic(self, df: pd.DataFrame) -> pd.DataFrame:
+
+        column_mapping = {
+            'trade_date': 'Date',
+            'total_mv': 'TotalMV',
+            'circ_mv': 'CircMV',
+            'turnover_rate': 'TurnoverRate',
+            'pe': 'PE'
+        }
+
+        df = df.rename(columns=column_mapping)
+
+        df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+        # 🔥 核心：T+1 延迟（防未来函数）
+        df['Date'] = df['Date'] + pd.Timedelta(days=1)
+        df.set_index('Date', inplace=True)
+
+        # 数值转换
+        for col in ['TotalMV', 'CircMV', 'TurnoverRate', 'PE']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df = df.sort_index()
+
+        return df
+
     def _fetch_from_api(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         从 Tushare API 获取数据（带完整数据清洗）
@@ -624,6 +786,8 @@ class TushareDataFetcher:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+            # 🔥 核心：T+1 延迟（防未来函数）
+            df['Date'] = df['Date'] + pd.Timedelta(days=1)
             df.set_index('Date', inplace=True)
         df = df.dropna()
         df['Symbol'] = symbol
@@ -632,6 +796,13 @@ class TushareDataFetcher:
     def _get_stock_cache_path(self, symbol: str) -> Path:
         safe_symbol = symbol.replace('.', '_')
         return self.stocks_dir / f"{safe_symbol}.parquet"
+
+    def _get_basic_cache_path(self, symbol: str) -> Path:
+        """
+        基本面数据（daily_basic）
+        """
+        safe_symbol = symbol.replace('.', '_')
+        return self.stocks_dir / f"{safe_symbol}_basic.parquet"
 
     def _save_to_cache(self, df: pd.DataFrame, cache_file: Path):
         try:

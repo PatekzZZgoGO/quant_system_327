@@ -4,7 +4,10 @@ from infra.config import config
 from data.ingestion.tushare_client import TushareDataFetcher
 
 
-def register_data_commands(subparsers):
+# =========================
+# ✅ CLI 注册入口（关键！！）
+# =========================
+def register(subparsers):
     # 一级：data
     data_parser = subparsers.add_parser("data", help="数据模块")
     data_sub = data_parser.add_subparsers(dest="action")
@@ -55,7 +58,6 @@ def register_data_commands(subparsers):
 def handle_update_stock(args):
     fetcher = TushareDataFetcher(symbol=args.code)
 
-    # 处理日期参数
     start_date = args.start_date or config.get('data.batch_start_date', '2020-01-01')
     end_date = args.end_date or config.get('data.batch_end_date')
 
@@ -65,8 +67,17 @@ def handle_update_stock(args):
         force_refresh=args.force_refresh
     )
 
+    # 🔥 同时拉 basic（关键升级）
+    basic_df = fetcher.fetch_daily_basic(
+        start_date=start_date,
+        end_date=end_date,
+        force_refresh=args.force_refresh
+    )
+
     if not df.empty:
-        print(f"\n✅ 股票 {args.code} 更新完成，共 {len(df)} 条记录")
+        print(f"\n✅ 股票 {args.code} 更新完成（price + basic）")
+        print(f"   price: {len(df)} 条")
+        print(f"   basic: {len(basic_df)} 条")
     else:
         print(f"❌ 股票 {args.code} 更新失败")
 
@@ -74,31 +85,45 @@ def handle_update_stock(args):
 def handle_update_stocks(args):
     fetcher = TushareDataFetcher()
 
-    # 处理日期参数
     start_date = args.start_date or config.get('data.batch_start_date', '2020-01-01')
     end_date = args.end_date or config.get('data.batch_end_date')
 
-    # 处理限制
     stock_list = None
     if args.limit:
         all_stocks = fetcher.get_stock_list()
         stock_list = all_stocks[:args.limit]
         print(f"🎯 仅处理前 {len(stock_list)} 只股票")
 
-    # 断点续传逻辑：
-    # - 如果指定了 --force-refresh，则强制刷新（忽略已有数据，skip_existing=False）
-    # - 否则如果指定了 --resume，则跳过已存在的文件（skip_existing=True）
-    # - 两者都不指定时，默认 skip_existing=False（即不跳过，可能重复下载？）
-    # 可根据业务需求调整默认行为。这里我们设定：默认不跳过，但若 --resume 则跳过。
     skip_existing = args.resume and not args.force_refresh
 
-    fetcher.fetch_all_stocks(
-        start_date=start_date,
-        end_date=end_date,
-        force_refresh=args.force_refresh,
-        skip_existing=skip_existing,
-        stock_list=stock_list
-    )
+    # =========================
+    # 🚀 核心：price + basic 一起拉
+    # =========================
+    if stock_list is None:
+        stock_list = fetcher.get_stock_list()
+
+    for i, symbol in enumerate(stock_list):
+        print(f"\n📊 [{i+1}/{len(stock_list)}] 处理 {symbol}")
+
+        try:
+            fetcher.symbol = symbol
+
+            df = fetcher.fetch_historical_data(
+                start_date=start_date,
+                end_date=end_date,
+                force_refresh=args.force_refresh
+            )
+
+            basic_df = fetcher.fetch_daily_basic(
+                start_date=start_date,
+                end_date=end_date,
+                force_refresh=args.force_refresh
+            )
+
+        except Exception as e:
+            print(f"❌ {symbol} 失败: {e}")
+
+    print("\n✅ 全部更新完成（price + basic）")
 
 
 def handle_status_cache(args):
