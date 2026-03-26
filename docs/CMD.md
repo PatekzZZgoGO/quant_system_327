@@ -8,41 +8,48 @@
         uik00533@RXL1718W MINGW64 /d/qaunt_system_327/quant_system_327 (main)
         $ PYTHONUTF8=1 pip install -r requirements.txt
 # 数据获取
-        # =========================
+        1️⃣ 更新单只股票
+        python run.py data update stock --code <股票代码>
 
-        python run.py data update stocks       # 全量更新股票数据（默认带缓存、断点续传）
+        参数说明：
 
-        python run.py data update stocks --limit 200     # 仅更新前200只（调试/测试用）
+        --code           必填，股票代码，如 000001.SZ
+        --start-date     起始日期 YYYY-MM-DD
+        --end-date       结束日期 YYYY-MM-DD
+        --force-refresh  强制重新下载
+        2️⃣ 更新多只股票
+        python run.py data update stocks
 
-        python run.py data update stocks --force-refresh # 强制刷新（忽略缓存，重新拉）
+        参数说明：
 
-        python run.py data update stocks --start-date 2020-01-01 --end-date 2024-01-01   # 指定时间范围
+        --start-date     起始日期
+        --end-date       结束日期
+        --limit          仅更新前 N 只股票（测试用）
+        --force-refresh  强制刷新（忽略缓存）
+        --resume         断点续传（跳过已存在数据）
+        3️⃣ 查看缓存状态
+        python run.py data status cache
+# 因子选股
 
-        python run.py data update stocks --resume        # 断点续传（默认其实已经开启）
+        1️⃣ 运行因子选股
+        python run.py factor run --date <日期>
 
-        # =========================
-        # 股票列表
-        # =========================
+        参数说明：
 
-        python run.py data update stock_list   # 从Tushare获取最新股票列表
-
-        # =========================
-        # 缓存状态
-        # =========================
-
-        python run.py data status              # 查看缓存覆盖率（总数/已缓存/缺失）
-
-        # =========================
-        # 调试常用
-        # =========================
-
-        python run.py data update stocks --limit 10      # 小规模测试（10只）
-
-        python run.py data update stocks --limit 50 --force-refresh   # 强制重跑小批数据
-
-        python run.py data update stocks --limit 1       # 单只调试（定位bug用）
-
-
+        --date     必填，交易日 YYYYMMDD
+        --top-n    选股数量（默认 50）
+        --limit    限制股票池数量（测试用）
+        --weights  因子权重，如 momentum_20d=0.6,volatility_20d=-0.2
+        --save     保存结果到 CSV
+        🎯 常用示例
+        测试模式（推荐）
+        python run.py factor run --date 20240105 --top-n 5 --limit 20
+        自定义权重
+        python run.py factor run \
+        --date 20240105 \
+        --weights momentum_20d=0.6,volatility_20d=-0.2,liquidity=0.2
+        保存结果
+        python run.py factor run --date 20240105 --save
 
 下一步做这个
 1️⃣ IC 分析（核心）
