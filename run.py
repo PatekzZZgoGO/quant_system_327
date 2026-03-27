@@ -5,6 +5,7 @@ from pathlib import Path
 import argparse
 import subprocess
 import importlib
+import cProfile
 
 # 修复路径
 PROJECT_ROOT = Path(__file__).parent
@@ -232,4 +233,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    cProfile.run('main()')

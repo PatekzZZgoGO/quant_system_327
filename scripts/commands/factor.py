@@ -3,9 +3,12 @@ import logging
 from typing import Dict, List, Tuple
 from pathlib import Path
 import importlib
+import time
+
 
 from features.engine.cross_sectional_engine import CrossSectionalEngine
 from data.loaders.market_loader import MarketDataLoader
+from data.loaders.universe_loader import UniverseLoader
 
 # 👉 IC 模块
 from features.analysis.ic import (
@@ -15,50 +18,32 @@ from features.analysis.ic import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# =========================
-# 📂 股票池
-# =========================
-def load_stock_list():
-    path = Path("data/datasets/processed/stock_list.csv")
-
-    if not path.exists():
-        raise FileNotFoundError(
-            "❌ stock_list.csv 不存在，请先运行:\n"
-            "python run.py data update stocks"
-        )
-
-    df = pd.read_csv(path)
-
-    if "symbol" not in df.columns:
-        raise ValueError("❌ stock_list.csv 缺少 symbol 列")
-
-    return df["symbol"].dropna().astype(str).tolist()
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # =========================
 # 🧠 model
 # =========================
 def load_model(name: str):
     try:
+        logger.info(f"[load_model] Loading model: {name}")
         return importlib.import_module(f"models.alpha.{name}")
     except ModuleNotFoundError:
+        logger.error(f"[ERROR] model not found: {name}")
         raise ValueError(f"[ERROR] model not found: {name}")
-
 
 # =========================
 # 🧠 factor 解析（核心）
 # =========================
-
 def resolve_factors(args, engine):
 
     # 1️⃣ 用户指定
     if args.factors:
+        logger.info(f"[resolve_factors] Using user specified factors: {args.factors}")
         return args.factors, "user"
 
     # 2️⃣ model
     if args.model:
+        logger.info(f"[resolve_factors] Resolving factors from model: {args.model}")
         model = load_model(args.model)
 
         if hasattr(model, "get_weights"):
@@ -66,13 +51,14 @@ def resolve_factors(args, engine):
         elif hasattr(model, "WEIGHTS"):
             factors = list(model.WEIGHTS.keys())
         else:
+            logger.error("[resolve_factors] model has no weights")
             raise ValueError("model has no weights")
 
         return factors, "model"
 
     # 3️⃣ 全量（正确）
+    logger.info("[resolve_factors] Using all available factors from registry")
     return engine.pipeline.registry.list_factors(), "registry"
-
 
 # =========================
 # 🚀 主执行函数
@@ -90,10 +76,12 @@ def run_factor(args):
     # =========================
     # 2️⃣ 加载模型
     # =========================
+    logger.info(f"[Factor] Loading model: {args.model}")
     model = load_model(args.model)
 
     # 权重
     if args.weights:
+        logger.info(f"[Factor] Using user-specified weights: {args.weights}")
         weights = dict(
             (k.strip(), float(v))
             for k, v in (
@@ -102,10 +90,13 @@ def run_factor(args):
         )
     else:
         if hasattr(model, "get_weights"):
+            logger.info("[Factor] Fetching weights from model")
             weights = model.get_weights(args.date)
         elif hasattr(model, "WEIGHTS"):
+            logger.info("[Factor] Fetching weights from model (WEIGHTS)")
             weights = model.WEIGHTS
         else:
+            logger.error("[ERROR] model has no weights")
             raise ValueError("[ERROR] model has no weights")
 
     logger.info(f"[Factor] model = {args.model}")
@@ -115,27 +106,25 @@ def run_factor(args):
     # 3️⃣ 日期
     # =========================
     date = pd.to_datetime(args.date)
+    logger.info(f"[Factor] Date = {date}")
 
     # =========================
     # 4️⃣ 股票池
     # =========================
-    stock_list = load_stock_list()
+    logger.info("[Factor] Fetching stock list")
+    universe_loader = UniverseLoader()
+    stock_list = universe_loader.get_universe(limit=args.limit)
 
     if not stock_list:
         logger.error("[Factor] stock list is empty")
         return
 
-# 🚀 测试模式：限制股票数量
-    if args.limit:
-        stock_list = stock_list[:args.limit]
-        logger.info(f"[Factor] TEST MODE: limit = {args.limit}")
-
     logger.info(f"[Factor] universe size = {len(stock_list)}")
-
 
     # =========================
     # 5️⃣ 运行引擎
     # =========================
+    logger.info(f"[Factor] Running engine with {len(stock_list)} stocks")
     selected, df = engine.run(
         date=date,
         universe=stock_list,
@@ -164,6 +153,7 @@ def run_factor(args):
         .sort_values("score", ascending=False)
         .to_string(index=False)
     )
+
     # =========================
     # 因子贡献
     # =========================
@@ -180,6 +170,7 @@ def run_factor(args):
         .head(args.top_n)
         .to_string(index=False)
     )
+
     # =========================
     # 8️⃣ Debug 信息
     # =========================
@@ -215,7 +206,6 @@ def run_factor(args):
     logger.info("[Factor] Done")
     logger.info("=" * 50)
 
-
 # =========================
 # 🚀 IC（重构版）
 # =========================
@@ -226,45 +216,71 @@ def run_factor_ic(args):
     data_loader = MarketDataLoader()
     engine = CrossSectionalEngine(data_loader)
 
-    model = load_model(args.model) if args.model else None
+    # 获取股票池
+    universe_loader = UniverseLoader()
+    stock_list = universe_loader.get_universe(limit=args.limit)
 
+    # 获取交易日列表
     dates = data_loader.get_trade_dates(args.start, args.end)
-    stock_list = load_stock_list()
-
-    if args.limit:
-        stock_list = stock_list[:args.limit]
-        logger.info(f"[IC] TEST MODE limit = {args.limit}")
+    if not dates:
+        logger.error("[IC] No trade dates in range")
+        return
 
     # =========================
-    # 🧠 先确定因子集合
+    # 🚀 关键优化：一次性加载整个区间的面板数据
     # =========================
+    logger.info(f"[IC] Preloading panel from {args.start} to {args.end} for {len(stock_list)} stocks")
+    
+    start_time = time.time()
+    
+    panel = data_loader.load_panel(args.start, args.end, stock_list)
+    if panel.empty:
+        logger.error("[IC] Panel is empty")
+        return
 
+    end_time = time.time()
+    logger.info(f"Loading panel took {end_time - start_time:.4f} seconds")
+
+    # 确定因子列表
     factors, source = resolve_factors(args, engine)
-
     logger.info(f"[IC] factors = {factors}")
     logger.info(f"[IC] source = {source}")
 
     all_ic = []
 
-    for date in dates:
-        logger.info(f"[IC] {date}")
+    for date_str in dates:
+        date = pd.to_datetime(date_str)
+        logger.info(f"[IC] {date_str}")
 
+        # =========================
+        # 从预加载面板中提取截至当前日期的历史数据
+        # =========================
+        hist_df = panel[panel.index <= date].copy()
+
+        if hist_df.empty:
+            continue
+
+        start_time = time.time()
+
+        # 调用 engine.run，传入预加载的数据
         try:
             _, df = engine.run(
-                date=pd.to_datetime(date),
+                date=date,
                 universe=stock_list,
-                model=None,          
-                factors=factors,     
-                top_n=None
+                model=None,
+                factors=factors,
+                top_n=None,
+                df=hist_df  # 关键：传入预加载数据
             )
 
             if df is None or df.empty:
                 continue
 
-            future_ret = data_loader.get_future_returns(
-                date=date,
-                horizon=args.horizon
-            )
+            # 获取未来收益（也需要预加载优化，但先保持原样）
+            future_ret = data_loader.get_future_returns(date_str, horizon=args.horizon)
+
+            if future_ret.empty:
+                continue
 
             merged = df.merge(future_ret, on="Symbol", how="inner")
 
@@ -287,14 +303,18 @@ def run_factor_ic(args):
 
             for f, ic in ic_dict.items():
                 all_ic.append({
-                    "date": date,
+                    "date": date_str,
                     "factor": f.replace("_z", ""),
                     "ic": ic
                 })
 
         except Exception as e:
-            logger.warning(f"[IC] {date} failed: {e}")
+            logger.warning(f"[IC] {date_str} failed: {e}")
+            logger.exception(f"[IC] {date_str} failed")
             continue
+
+    end_time = time.time()
+    logger.info(f"Factor calculation took {end_time - start_time:.4f} seconds")
 
     ic_df = pd.DataFrame(all_ic)
 
@@ -317,7 +337,6 @@ def run_factor_ic(args):
 
     logger.info("[Factor IC] Done")
     logger.info("=" * 50)
-
 
 # =========================
 # 🧩 CLI 注册
