@@ -1,6 +1,6 @@
 import pandas as pd
 import logging
-from typing import Dict
+from typing import Dict, List, Tuple
 from pathlib import Path
 import importlib
 
@@ -10,6 +10,7 @@ from data.loaders.market_loader import MarketDataLoader
 # 👉 IC 模块
 from features.analysis.ic import (
     summarize_ic,
+    compute_snapshot_ic,
     compute_rank_corr
 )
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 # =========================
-# 📂 本地股票池读取（关键）
+# 📂 股票池
 # =========================
 def load_stock_list():
     path = Path("data/datasets/processed/stock_list.csv")
@@ -33,34 +34,45 @@ def load_stock_list():
     if "symbol" not in df.columns:
         raise ValueError("❌ stock_list.csv 缺少 symbol 列")
 
-    stock_list = df["symbol"].dropna().astype(str).tolist()
-
-    return stock_list
+    return df["symbol"].dropna().astype(str).tolist()
 
 
 # =========================
-# 🧠 权重解析
+# 🧠 model
 # =========================
-def parse_weights(w_str: str) -> Dict[str, float]:
-    try:
-        return dict(
-            (k.strip(), float(v))
-            for k, v in (
-                item.split("=") for item in w_str.split(",")
-            )
-        )
-    except Exception:
-        raise ValueError(
-            f"[ERROR] Invalid weights format: {w_str}\n"
-            f"Example: momentum=0.6,volatility=-0.2"
-        )
-
 def load_model(name: str):
     try:
-        module = importlib.import_module(f"models.alpha.{name}")
-        return module
+        return importlib.import_module(f"models.alpha.{name}")
     except ModuleNotFoundError:
         raise ValueError(f"[ERROR] model not found: {name}")
+
+
+# =========================
+# 🧠 factor 解析（核心）
+# =========================
+
+def resolve_factors(args, engine):
+
+    # 1️⃣ 用户指定
+    if args.factors:
+        return args.factors, "user"
+
+    # 2️⃣ model
+    if args.model:
+        model = load_model(args.model)
+
+        if hasattr(model, "get_weights"):
+            factors = list(model.get_weights().keys())
+        elif hasattr(model, "WEIGHTS"):
+            factors = list(model.WEIGHTS.keys())
+        else:
+            raise ValueError("model has no weights")
+
+        return factors, "model"
+
+    # 3️⃣ 全量（正确）
+    return engine.pipeline.registry.list_factors(), "registry"
+
 
 # =========================
 # 🚀 主执行函数
@@ -82,8 +94,12 @@ def run_factor(args):
 
     # 权重
     if args.weights:
-        weights = parse_weights(args.weights)
-        logger.info("[Factor] Using CLI weights override")
+        weights = dict(
+            (k.strip(), float(v))
+            for k, v in (
+                item.split("=") for item in args.weights.split(",")
+            )
+        )
     else:
         if hasattr(model, "get_weights"):
             weights = model.get_weights(args.date)
@@ -192,25 +208,16 @@ def run_factor(args):
         factors=list(weights.keys())
     )
 
-    print("\n=== Rank Corr (vs score) ===")
+    print("\n=== Rank Corr ===")
     for k, v in rank_corr.items():
         print(f"{k}: {v:.4f}")
-
-    # =========================
-    # 9️⃣ 保存结果
-    # =========================
-    if args.save:
-        Path("outputs").mkdir(exist_ok=True)
-        output_path = f"outputs/top_{args.top_n}_{args.date}.csv"
-        selected.to_csv(output_path, index=False)
-        logger.info(f"[Factor] saved to {output_path}")
 
     logger.info("[Factor] Done")
     logger.info("=" * 50)
 
 
 # =========================
-# 🚀 IC Time Series（独立命令）
+# 🚀 IC（重构版）
 # =========================
 def run_factor_ic(args):
     logger.info("=" * 50)
@@ -219,7 +226,7 @@ def run_factor_ic(args):
     data_loader = MarketDataLoader()
     engine = CrossSectionalEngine(data_loader)
 
-    model = load_model(args.model)
+    model = load_model(args.model) if args.model else None
 
     dates = data_loader.get_trade_dates(args.start, args.end)
     stock_list = load_stock_list()
@@ -227,6 +234,15 @@ def run_factor_ic(args):
     if args.limit:
         stock_list = stock_list[:args.limit]
         logger.info(f"[IC] TEST MODE limit = {args.limit}")
+
+    # =========================
+    # 🧠 先确定因子集合
+    # =========================
+
+    factors, source = resolve_factors(args, engine)
+
+    logger.info(f"[IC] factors = {factors}")
+    logger.info(f"[IC] source = {source}")
 
     all_ic = []
 
@@ -237,8 +253,9 @@ def run_factor_ic(args):
             _, df = engine.run(
                 date=pd.to_datetime(date),
                 universe=stock_list,
-                model=model,
-                top_n=None  # ⚠️必须
+                model=None,          
+                factors=factors,     
+                top_n=None
             )
 
             if df is None or df.empty:
@@ -251,30 +268,27 @@ def run_factor_ic(args):
 
             merged = df.merge(future_ret, on="Symbol", how="inner")
 
-            if merged.empty:
+            if len(merged) < 5:
                 continue
 
-            if hasattr(model, "get_weights"):
-                weights = model.get_weights(date)
-            elif hasattr(model, "WEIGHTS"):
-                weights = model.WEIGHTS
-            else:
-                raise ValueError("model has no weights")
+            factor_cols = []
+            for f in factors:
+                if f"{f}_z" in merged.columns:
+                    factor_cols.append(f"{f}_z")
+                elif f in merged.columns:
+                    factor_cols.append(f)
 
-            for f in weights.keys():
+            ic_dict = compute_snapshot_ic(
+                merged,
+                factor_cols=factor_cols,
+                ret_col=f"ret_{args.horizon}d",
+                method="spearman"
+            )
 
-                col = f"{f}_z" if f"{f}_z" in merged.columns else f
-
-                if col not in merged.columns:
-                    continue
-
-                ic = merged[col].corr(
-                    merged[f"ret_{args.horizon}d"]
-                )
-
+            for f, ic in ic_dict.items():
                 all_ic.append({
                     "date": date,
-                    "factor": f,
+                    "factor": f.replace("_z", ""),
                     "ic": ic
                 })
 
@@ -366,12 +380,16 @@ def register(subparsers):
 
     run_parser.set_defaults(func=run_factor)
 
-    # ic
-    ic_parser = subparsers_factor.add_parser("ic", help="IC 分析")
-    ic_parser.add_argument("--start", type=str, required=True)
-    ic_parser.add_argument("--end", type=str, required=True)
-    ic_parser.add_argument("--model", type=str, required=True)
+    # IC
+    ic_parser = subparsers_factor.add_parser("ic")
+
+    ic_parser.add_argument("--start", required=True)
+    ic_parser.add_argument("--end", required=True)
+
+    ic_parser.add_argument("--model", required=False)
+    ic_parser.add_argument("--factors", nargs="+")
     ic_parser.add_argument("--horizon", type=int, default=5)
-    ic_parser.add_argument("--limit", type=int, default=None) 
+    ic_parser.add_argument("--limit", type=int)
     ic_parser.add_argument("--save", action="store_true")
+
     ic_parser.set_defaults(func=run_factor_ic)

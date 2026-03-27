@@ -143,6 +143,7 @@ class CrossSectionalEngine:
         universe: List[str],
         weights: Dict[str, float] = None,
         model=None,
+        factors: List[str] = None,
         top_n: int = 50
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
@@ -154,15 +155,20 @@ class CrossSectionalEngine:
         # 🧠 从 model 获取 weights（新增）
         # =========================
         if weights is None:
-            if model is None:
-                raise ValueError("[Engine] weights or model must be provided")
+            # 👉 IC模式（只算因子，不打分）
+            if model is None and factors is not None:
+                weights = {f: 0.0 for f in factors}
+            # 👉 正常模式
+            elif model is not None:
+                if hasattr(model, "get_weights"):
+                    weights = model.get_weights(date)
+                elif hasattr(model, "WEIGHTS"):
+                    weights = model.WEIGHTS
+                else:
+                    raise ValueError("[Engine] model has no weights")
 
-            if hasattr(model, "get_weights"):
-                weights = model.get_weights(date)
-            elif hasattr(model, "WEIGHTS"):
-                weights = model.WEIGHTS
             else:
-                raise ValueError("[Engine] model has no weights")
+                raise ValueError("[Engine] need weights or model or factors")
 
         logger.info(f"[Engine] weights = {weights}")
 
@@ -192,7 +198,13 @@ class CrossSectionalEngine:
         # =========================
         # 3️⃣ 因子计算（pipeline）
         # =========================
-        df = self.pipeline.run(df, factors=list(weights.keys()))
+        # 👇 核心逻辑
+        if factors is not None:
+            factor_list = factors
+        else:
+            factor_list = list(weights.keys())
+
+        df = self.pipeline.run(df, factors=factor_list)
         # =========================
         # 4️⃣ 横截面提取
         # =========================

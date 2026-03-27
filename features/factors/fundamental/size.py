@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def size(df):
+def size(df, context=None):
     """
     👻 市值因子
     """

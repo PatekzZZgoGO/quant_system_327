@@ -35,15 +35,7 @@ COMMAND_TREE = {
                 "help": "运行因子选股"
             },
             "ic": {
-                "help": "IC 分析",
-                "subcommands": {
-                    "run": {
-                        "help": "计算 IC time series"
-                    },
-                    "summary": {
-                        "help": "IC 统计指标"
-                    }
-                }
+                "help": "IC 分析"
             }
         }
     }
