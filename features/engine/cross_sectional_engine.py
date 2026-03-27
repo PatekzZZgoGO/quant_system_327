@@ -95,16 +95,11 @@ class CrossSectionalEngine:
     # 📈 因子标准化 + 打分
     # =========================
     def score(self, df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
-        """
-        👻 横截面打分流程：
-
-        1. winsorize（未来可加）
-        2. zscore 标准化
-        3. 加权求和
-        """
-
         df = df.copy()
 
+        # =========================
+        # 1️⃣ zscore
+        # =========================
         for f in weights.keys():
 
             if f not in df.columns:
@@ -113,10 +108,16 @@ class CrossSectionalEngine:
 
             df[f + "_z"] = zscore(df[f])
 
+        # =========================
+        # 2️⃣ score + 因子贡献
+        # =========================
         df['score'] = 0.0
 
         for f, w in weights.items():
-            df['score'] += df[f + "_z"] * w
+            contrib_col = f"{f}_contrib"
+
+            df[contrib_col] = df[f + "_z"] * w
+            df['score'] += df[contrib_col]
 
         return df
 
@@ -140,13 +141,30 @@ class CrossSectionalEngine:
         self,
         date: str,
         universe: List[str],
-        weights: Dict[str, float],
+        weights: Dict[str, float] = None,
+        model=None,
         top_n: int = 50
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         logger.info("=" * 60)
         logger.info(f"[Engine] RUN date={date}")
         logger.info(f"[Engine] universe size={len(universe)}")
+
+        # =========================
+        # 🧠 从 model 获取 weights（新增）
+        # =========================
+        if weights is None:
+            if model is None:
+                raise ValueError("[Engine] weights or model must be provided")
+
+            if hasattr(model, "get_weights"):
+                weights = model.get_weights(date)
+            elif hasattr(model, "WEIGHTS"):
+                weights = model.WEIGHTS
+            else:
+                raise ValueError("[Engine] model has no weights")
+
+        logger.info(f"[Engine] weights = {weights}")
 
         # =========================
         # 1️⃣ 数据加载

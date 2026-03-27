@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 from typing import Dict
 from pathlib import Path
+import importlib
 
 from features.engine.cross_sectional_engine import CrossSectionalEngine
 from data.loaders.market_loader import MarketDataLoader
@@ -48,6 +49,12 @@ def parse_weights(w_str: str) -> Dict[str, float]:
             f"Example: momentum=0.6,volatility=-0.2"
         )
 
+def load_model(name: str):
+    try:
+        module = importlib.import_module(f"models.alpha.{name}")
+        return module
+    except ModuleNotFoundError:
+        raise ValueError(f"[ERROR] model not found: {name}")
 
 # =========================
 # 🚀 主执行函数
@@ -63,17 +70,23 @@ def run_factor(args):
     engine = CrossSectionalEngine(data_loader)
 
     # =========================
-    # 2️⃣ 权重
+    # 2️⃣ 加载模型
     # =========================
+    model = load_model(args.model)
+
+    # 👉 优先 CLI 覆盖（可选）
     if args.weights:
         weights = parse_weights(args.weights)
+        logger.info("[Factor] Using CLI weights override")
     else:
-        weights = {
-            "momentum": 0.6,
-            "volatility": -0.2,
-            "liquidity": 0.2,
-        }
+        if hasattr(model, "get_weights"):
+            weights = model.get_weights(args.date)
+        elif hasattr(model, "WEIGHTS"):
+            weights = model.WEIGHTS
+        else:
+            raise ValueError("[ERROR] model has no weights")
 
+    logger.info(f"[Factor] model = {args.model}")
     logger.info(f"[Factor] weights = {weights}")
 
     # =========================
@@ -105,7 +118,7 @@ def run_factor(args):
     selected, df = engine.run(
         date=date,
         universe=stock_list,
-        weights=weights,
+        model=model,
         top_n=args.top_n,
     )
 
@@ -130,7 +143,18 @@ def run_factor(args):
         .sort_values("score", ascending=False)
         .to_string(index=False)
     )
+    # =========================
+    # 打印因子贡献
+    # =========================
+    contrib_cols = [f"{f}_contrib" for f in weights.keys() if f"{f}_contrib" in selected.columns]
 
+    print("\n=== Factor Contribution ===")
+    print(
+        selected[["Symbol", "score"] + contrib_cols]
+        .head(args.top_n)
+        .sort_values("score", ascending=False)
+        .to_string(index=False)
+    )
     # =========================
     # 8️⃣ Debug 信息
     # =========================
@@ -142,6 +166,13 @@ def run_factor(args):
         print(
             f"Score range: {df['score'].min():.4f} ~ {df['score'].max():.4f}"
         )
+
+    print("\n=== Factor Stats ===")
+    for c in contrib_cols:
+        print(f"{c}:")
+        print(f"  mean     = {selected[c].mean():.4f}")
+        print(f"  abs_mean = {selected[c].abs().mean():.4f}")
+        print(f"  std      = {selected[c].std():.4f}")
 
     # =========================
     # 9️⃣ 保存结果
@@ -204,6 +235,13 @@ def register(subparsers):
         "--weights",
         type=str,
         help="因子权重，如 momentum=0.6,volatility=-0.2",
+    )
+
+    run_parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="策略模型名称，如 simple_alpha",
     )
 
     run_parser.add_argument(
