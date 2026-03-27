@@ -31,25 +31,116 @@
         python run.py data status cache
 # 因子选股
 
-        1️⃣ 运行因子选股
-        python run.py factor run --date <日期>
+        # 📊 Factor 模块 CLI
 
-        参数说明：
+        ## 🚀 运行因子选股
 
-        --date     必填，交易日 YYYYMMDD
-        --top-n    选股数量（默认 50）
-        --limit    限制股票池数量（测试用）
-        --weights  因子权重，如 momentum_20d=0.6,volatility_20d=-0.2
-        --save     保存结果到 CSV
-        🎯 常用示例
-        测试模式（推荐）
-        python run.py factor run --date 20240105 --top-n 5 --limit 20
-        自定义权重
+        ```bash
+        python run.py factor run --date 20240105 --model simple_alpha
+        ```
+
+        ---
+
+        ## 📌 参数说明
+
+        ### 必填参数
+
+        ```bash
+        --date 20240105
+        ```
+
+        * 交易日期（YYYYMMDD）
+        * 用于生成当日横截面（防未来函数）
+
+        ```bash
+        --model simple_alpha
+        ```
+
+        * 策略模型名称
+        * 对应路径：models/alpha/simple_alpha.py
+        * 提供因子权重（WEIGHTS 或 get_weights）
+
+        ---
+
+        ### 可选参数
+
+        ```bash
+        --top-n 50
+        ```
+
+        * 选股数量（默认 50）
+
+        ---
+
+        ```bash
+        --limit 20
+        ```
+
+        * 限制股票池数量（测试用，强烈建议调试时使用）
+
+        ---
+
+        ```bash
+        --weights momentum_20d=1.0,volatility_20d=-1.0
+        ```
+
+        * 手动指定权重（覆盖 model）
+        * 格式：因子名=权重（必须与因子函数名一致）
+
+        ---
+
+        ```bash
+        --save
+        ```
+
+        * 保存结果到 outputs/ 目录
+
+        ---
+
+        ## 🧪 常用示例
+
+        ### 基础运行
+
+        ```bash
+        python run.py factor run --date 20240105 --model simple_alpha
+        ```
+
+        ---
+
+        ### 小样本测试
+
+        ```bash
+        python run.py factor run --date 20240105 --model simple_alpha --limit 20
+        ```
+
+        ---
+
+        ### 单因子测试
+
+        ```bash
+        python run.py factor run --date 20240105 --model low_vol --limit 20
+        ```
+
+        ---
+
+        ### 覆盖权重
+
+        ```bash
         python run.py factor run \
         --date 20240105 \
-        --weights momentum_20d=0.6,volatility_20d=-0.2,liquidity=0.2
-        保存结果
-        python run.py factor run --date 20240105 --save
+        --model simple_alpha \
+        --weights momentum_20d=1.0,volatility_20d=-0.3
+        ```
+
+        ---
+
+        ## 📊 输出说明（简要）
+
+        * **Top Stocks**：最终选股结果
+        * **Factor Contribution**：各因子贡献（zscore × weight）
+        * **Debug Info**：样本数量 / score 范围
+        * **Factor Stats**：因子影响力统计
+
 
 下一步做这个
 1️⃣ IC 分析（核心）
