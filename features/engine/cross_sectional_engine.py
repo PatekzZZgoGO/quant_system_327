@@ -193,7 +193,6 @@ class CrossSectionalEngine:
         # 3️⃣ 因子计算（pipeline）
         # =========================
         df = self.pipeline.run(df, factors=list(weights.keys()))
-
         # =========================
         # 4️⃣ 横截面提取
         # =========================
@@ -218,7 +217,10 @@ class CrossSectionalEngine:
         # =========================
         snapshot = snapshot.sort_values('score', ascending=False)
 
-        selected = snapshot.head(top_n)
+        if top_n is None:
+            selected = snapshot
+        else:
+            selected = snapshot.head(top_n)
 
         # =========================
         # 8️⃣ 日志

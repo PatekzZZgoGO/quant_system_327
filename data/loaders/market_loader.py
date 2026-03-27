@@ -92,10 +92,112 @@ class MarketDataLoader:
             df = self.load_one(symbol, start_date, end_date)
 
             if not df.empty:
-                df["Symbol"] = symbol
+                df["Symbol"] = symbol.upper()  # ✅ 统一大写（关键）
                 data.append(df)
 
         if not data:
             return pd.DataFrame()
 
         return pd.concat(data)
+
+    # =========================================================
+    # 🆕 以下是新增（IC 必需功能）
+    # =========================================================
+
+    # =========================
+    # 📅 获取所有股票代码
+    # =========================
+    def get_all_symbols(self):
+        symbols = []
+
+        for file in self.data_dir.glob("*.parquet"):
+            name = file.stem
+
+            # 跳过 basic 文件
+            if name.endswith("_basic"):
+                continue
+
+            symbol = name.replace("_", ".").upper()
+            symbols.append(symbol)
+
+        return list(set(symbols))
+
+    # =========================
+    # 📅 获取交易日
+    # =========================
+    def get_trade_dates(self, start: str, end: str):
+        """
+        从本地 parquet 推断交易日（无未来函数）
+        """
+
+        all_dates = set()
+
+        for file in self.data_dir.glob("*.parquet"):
+            try:
+                df = pd.read_parquet(file)
+
+                if isinstance(df.index, pd.DatetimeIndex):
+                    all_dates.update(df.index)
+
+            except Exception:
+                continue
+
+        dates = sorted(all_dates)
+
+        # 转字符串过滤
+        dates = [
+            d for d in dates
+            if start <= d.strftime("%Y%m%d") <= end
+        ]
+
+        return [d.strftime("%Y%m%d") for d in dates]
+
+    # =========================
+    # 📅 向后移动交易日
+    # =========================
+    def shift_trading_date(self, date: str, n: int):
+        dates = self.get_trade_dates("20000101", "20990101")
+
+        if date not in dates:
+            return None
+
+        idx = dates.index(date)
+
+        if idx + n >= len(dates):
+            return None
+
+        return dates[idx + n]
+
+    # =========================
+    # 📈 获取未来收益（IC核心）
+    # =========================
+    def get_future_returns(self, date: str, horizon: int = 5):
+        """
+        返回：
+        Symbol, ret_Nd
+        """
+
+        future_date = self.shift_trading_date(date, horizon)
+
+        if future_date is None:
+            return pd.DataFrame()
+
+        symbols = self.get_all_symbols()
+
+        df_t = self.load_multiple(symbols, end_date=date)
+        df_t1 = self.load_multiple(symbols, end_date=future_date)
+
+        snap_t = df_t[df_t.index == pd.to_datetime(date)][["Symbol", "Close"]]
+        snap_t1 = df_t1[df_t1.index == pd.to_datetime(future_date)][["Symbol", "Close"]]
+
+        merged = snap_t.merge(
+            snap_t1,
+            on="Symbol",
+            suffixes=("_t", "_t1")
+        )
+
+        merged[f"ret_{horizon}d"] = (
+            merged["Close_t1"] / merged["Close_t"] - 1
+        )
+
+        return merged[["Symbol", f"ret_{horizon}d"]]

@@ -7,6 +7,12 @@ import importlib
 from features.engine.cross_sectional_engine import CrossSectionalEngine
 from data.loaders.market_loader import MarketDataLoader
 
+# 👉 IC 模块
+from features.analysis.ic import (
+    summarize_ic,
+    compute_rank_corr
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +80,7 @@ def run_factor(args):
     # =========================
     model = load_model(args.model)
 
-    # 👉 优先 CLI 覆盖（可选）
+    # 权重
     if args.weights:
         weights = parse_weights(args.weights)
         logger.info("[Factor] Using CLI weights override")
@@ -95,7 +101,7 @@ def run_factor(args):
     date = pd.to_datetime(args.date)
 
     # =========================
-    # 4️⃣ 股票池（🔥 改这里）
+    # 4️⃣ 股票池
     # =========================
     stock_list = load_stock_list()
 
@@ -110,7 +116,6 @@ def run_factor(args):
 
     logger.info(f"[Factor] universe size = {len(stock_list)}")
 
-    logger.info(f"[Factor] universe size = {len(stock_list)}")
 
     # =========================
     # 5️⃣ 运行引擎
@@ -144,15 +149,19 @@ def run_factor(args):
         .to_string(index=False)
     )
     # =========================
-    # 打印因子贡献
+    # 因子贡献
     # =========================
-    contrib_cols = [f"{f}_contrib" for f in weights.keys() if f"{f}_contrib" in selected.columns]
+    contrib_cols = [
+        f"{f}_contrib"
+        for f in weights.keys()
+        if f"{f}_contrib" in selected.columns
+    ]
 
     print("\n=== Factor Contribution ===")
     print(
         selected[["Symbol", "score"] + contrib_cols]
-        .head(args.top_n)
         .sort_values("score", ascending=False)
+        .head(args.top_n)
         .to_string(index=False)
     )
     # =========================
@@ -175,19 +184,124 @@ def run_factor(args):
         print(f"  std      = {selected[c].std():.4f}")
 
     # =========================
+    # Rank Corr
+    # =========================
+    rank_corr = compute_rank_corr(
+        df,
+        target_col="score",
+        factors=list(weights.keys())
+    )
+
+    print("\n=== Rank Corr (vs score) ===")
+    for k, v in rank_corr.items():
+        print(f"{k}: {v:.4f}")
+
+    # =========================
     # 9️⃣ 保存结果
     # =========================
     if args.save:
+        Path("outputs").mkdir(exist_ok=True)
         output_path = f"outputs/top_{args.top_n}_{args.date}.csv"
-
-        try:
-            Path("outputs").mkdir(exist_ok=True)
-            selected.to_csv(output_path, index=False)
-            logger.info(f"[Factor] saved to {output_path}")
-        except Exception as e:
-            logger.warning(f"[Factor] save failed: {e}")
+        selected.to_csv(output_path, index=False)
+        logger.info(f"[Factor] saved to {output_path}")
 
     logger.info("[Factor] Done")
+    logger.info("=" * 50)
+
+
+# =========================
+# 🚀 IC Time Series（独立命令）
+# =========================
+def run_factor_ic(args):
+    logger.info("=" * 50)
+    logger.info("[Factor IC] Start")
+
+    data_loader = MarketDataLoader()
+    engine = CrossSectionalEngine(data_loader)
+
+    model = load_model(args.model)
+
+    dates = data_loader.get_trade_dates(args.start, args.end)
+    stock_list = load_stock_list()
+
+    if args.limit:
+        stock_list = stock_list[:args.limit]
+        logger.info(f"[IC] TEST MODE limit = {args.limit}")
+
+    all_ic = []
+
+    for date in dates:
+        logger.info(f"[IC] {date}")
+
+        try:
+            _, df = engine.run(
+                date=pd.to_datetime(date),
+                universe=stock_list,
+                model=model,
+                top_n=None  # ⚠️必须
+            )
+
+            if df is None or df.empty:
+                continue
+
+            future_ret = data_loader.get_future_returns(
+                date=date,
+                horizon=args.horizon
+            )
+
+            merged = df.merge(future_ret, on="Symbol", how="inner")
+
+            if merged.empty:
+                continue
+
+            if hasattr(model, "get_weights"):
+                weights = model.get_weights(date)
+            elif hasattr(model, "WEIGHTS"):
+                weights = model.WEIGHTS
+            else:
+                raise ValueError("model has no weights")
+
+            for f in weights.keys():
+
+                col = f"{f}_z" if f"{f}_z" in merged.columns else f
+
+                if col not in merged.columns:
+                    continue
+
+                ic = merged[col].corr(
+                    merged[f"ret_{args.horizon}d"]
+                )
+
+                all_ic.append({
+                    "date": date,
+                    "factor": f,
+                    "ic": ic
+                })
+
+        except Exception as e:
+            logger.warning(f"[IC] {date} failed: {e}")
+            continue
+
+    ic_df = pd.DataFrame(all_ic)
+
+    if ic_df.empty:
+        logger.error("[IC] No results")
+        return
+
+    print("\n=== IC Time Series (tail) ===")
+    print(ic_df.tail())
+
+    summary = summarize_ic(ic_df)
+
+    print("\n=== IC Summary ===")
+    print(summary)
+
+    if args.save:
+        Path("outputs").mkdir(exist_ok=True)
+        ic_df.to_csv(f"outputs/ic_{args.start}_{args.end}.csv", index=False)
+        summary.to_csv(f"outputs/ic_summary_{args.start}_{args.end}.csv", index=False)
+
+    logger.info("[Factor IC] Done")
     logger.info("=" * 50)
 
 
@@ -251,3 +365,13 @@ def register(subparsers):
     )
 
     run_parser.set_defaults(func=run_factor)
+
+    # ic
+    ic_parser = subparsers_factor.add_parser("ic", help="IC 分析")
+    ic_parser.add_argument("--start", type=str, required=True)
+    ic_parser.add_argument("--end", type=str, required=True)
+    ic_parser.add_argument("--model", type=str, required=True)
+    ic_parser.add_argument("--horizon", type=int, default=5)
+    ic_parser.add_argument("--limit", type=int, default=None) 
+    ic_parser.add_argument("--save", action="store_true")
+    ic_parser.set_defaults(func=run_factor_ic)
