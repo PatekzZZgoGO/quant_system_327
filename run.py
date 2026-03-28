@@ -1,5 +1,6 @@
 import logging
 logging.basicConfig(level=logging.INFO)
+
 import sys
 from pathlib import Path
 import argparse
@@ -7,13 +8,16 @@ import subprocess
 import importlib
 import cProfile
 
-# 修复路径
+# =========================
+# 🛠️ 修复路径（项目根目录）
+# =========================
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
 # =========================
 # 🧩 UI 命令树（仅展示，不存参数）
+# 👉 ⚠️ 这里只是 UI，不影响 CLI 注册
 # =========================
 COMMAND_TREE = {
     "data": {
@@ -30,15 +34,15 @@ COMMAND_TREE = {
         }
     },
     "factor": {
-        "help": "因子模块",
+        "help": "因子模块（选股）",
         "subcommands": {
             "run": {
                 "help": "运行因子选股"
-            },
-            "ic": {
-                "help": "IC 分析"
             }
         }
+    },
+    "ic": {
+        "help": "IC 分析模块"
     }
 }
 
@@ -208,6 +212,7 @@ def interactive_main():
     else:
         print("已取消")
 
+
 # =========================
 # 🧠 主入口（CLI）
 # =========================
@@ -221,11 +226,14 @@ def main():
 
     subparsers = parser.add_subparsers(dest="module")
 
-    # 👉 自动加载所有 commands
+    # 👉 自动加载所有 commands（核心插件机制）
     auto_register_commands(subparsers)
 
     args = parser.parse_args()
 
+    # =========================
+    # 🚀 执行命令
+    # =========================
     if hasattr(args, "func"):
         args.func(args)
     else:
@@ -233,5 +241,7 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()
-    #cProfile.run('main()')
+    # cProfile.run('main()')
