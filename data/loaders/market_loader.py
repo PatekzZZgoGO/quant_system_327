@@ -3,10 +3,14 @@ import pickle
 import pandas as pd
 from pathlib import Path
 from infra.config import config
+import time
 import logging
 from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Initialize logger
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MarketDataLoader:
     """
@@ -22,6 +26,9 @@ class MarketDataLoader:
         self.data_dir = Path(config.get("data.path", "data/datasets/processed/stocks"))
         self._panel_cache = {}  # 新增：缓存面板数据
 
+    # =========================
+    # 加载面板数据
+    # =========================
     def load_panel(self, start_date: str, end_date: str, symbols: List[str]) -> pd.DataFrame:
         """
         加载指定日期范围和股票列表的面板数据（所有原始字段）。
@@ -39,13 +46,19 @@ class MarketDataLoader:
 
         logger.info(f"Loading panel for {len(symbols)} symbols from {start_date} to {end_date}")
 
-        # 收集每个股票的数据
+        # 使用多线程加速加载过程
         all_data = []
-        for symbol in symbols:
-            df = self.load_one(symbol, start_date=start_date, end_date=end_date)
-            if not df.empty:
-                df['Symbol'] = symbol.upper()
-                all_data.append(df)
+        with ThreadPoolExecutor() as executor:
+            future_to_symbol = {executor.submit(self.load_one, symbol, start_date, end_date): symbol for symbol in symbols}
+            for future in as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        df['Symbol'] = symbol.upper()
+                        all_data.append(df)
+                except Exception as e:
+                    logger.warning(f"Failed to load data for symbol {symbol}: {e}")
 
         if not all_data:
             return pd.DataFrame()
@@ -66,11 +79,12 @@ class MarketDataLoader:
         return panel
 
     # =========================
-    # 单只股票
+    # 单只股票数据
     # =========================
-    def load_one(self, symbol, start_date=None, end_date=None):
+    def load_one(self, symbol, start_date=None, end_date=None, load_columns=None):
         """
-        加载单只股票的历史数据，并进行时间对齐。
+        加载单只股票的历史数据（仅加载指定列），并进行时间对齐。
+        - load_columns 为 None 或空列表时，加载所有列；否则，只加载指定列。
         """
         price_path = self.data_dir / f"{symbol.replace('.', '_')}.parquet"
         basic_path = self.data_dir / f"{symbol.replace('.', '_')}_basic.parquet"
@@ -79,7 +93,8 @@ class MarketDataLoader:
             logger.warning(f"❌ 缺少 price 数据: {symbol}")
             return pd.DataFrame()
 
-        price_df = pd.read_parquet(price_path)
+        # 如果 load_columns 为空或 None，加载所有列；否则，只加载指定列
+        price_df = pd.read_parquet(price_path, columns=load_columns if load_columns else None)
 
         if not isinstance(price_df.index, pd.DatetimeIndex):
             price_df.index = pd.to_datetime(price_df.index)
@@ -133,20 +148,32 @@ class MarketDataLoader:
         return df
 
     # =========================
-    # 多股票
+    # 多股票数据
     # =========================
-    def load_multiple(self, symbols, start_date=None, end_date=None):
+    def load_multiple(self, symbols, start_date=None, end_date=None, load_columns=None):
         """
-        加载多个股票的数据并合并为一个面板数据。
+        加载多个股票的数据并合并为一个面板数据（仅加载指定列），并行加载提高性能。
+        - load_columns 为 None 或空列表时，加载所有列；否则，只加载指定列。
         """
         data = []
 
-        for symbol in symbols:
-            df = self.load_one(symbol, start_date, end_date)
+        # 使用线程池并行加载每个股票的数据
+        with ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(self.load_one, symbol, start_date, end_date, load_columns): symbol
+                for symbol in symbols
+            }
 
-            if not df.empty:
-                df["Symbol"] = symbol.upper()  # ✅ 统一大写（关键）
-                data.append(df)
+            # 获取并处理每个未来的加载任务的结果
+            for future in futures:
+                symbol = futures[future]
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        df["Symbol"] = symbol.upper()  # 统一大写
+                        data.append(df)
+                except Exception as e:
+                    logger.warning(f"Failed to load data for {symbol}: {e}")
 
         if not data:
             return pd.DataFrame()
@@ -185,20 +212,46 @@ class MarketDataLoader:
         """
         获取指定日期范围内的交易日。
         """
+        start_time = time.time()
+        logger.info(f"[get_trade_dates] Start retrieving trade dates for range {start} to {end}")
+
         start_dt = pd.to_datetime(start)
         end_dt = pd.to_datetime(end)
+
         all_dates = set()
+
+        # Start reading data files
+        logger.info(f"[get_trade_dates] Start reading Parquet files from {self.data_dir}")
+        read_start_time = time.time()
+
         for file in self.data_dir.glob("*.parquet"):
             try:
                 df = pd.read_parquet(file)
                 if isinstance(df.index, pd.DatetimeIndex):
                     all_dates.update(df.index)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[get_trade_dates] Failed to read {file}: {e}")
                 continue
+
+        read_end_time = time.time()
+        logger.info(f"[get_trade_dates] Finished reading Parquet files in {read_end_time - read_start_time:.4f} seconds")
+
+        # Sorting and filtering dates
         dates = sorted(all_dates)
-        # 过滤
+        logger.info(f"[get_trade_dates] Sorting dates took {time.time() - read_end_time:.4f} seconds")
+
+        # Filter dates within range
         dates = [d for d in dates if start_dt <= d <= end_dt]
-        return [d.strftime("%Y%m%d") for d in dates]
+        logger.info(f"[get_trade_dates] Filtered dates in the range {start_dt} to {end_dt}")
+
+        # Converting dates to desired format
+        formatted_dates = [d.strftime("%Y%m%d") for d in dates]
+
+        # End of the function
+        end_time = time.time()
+        logger.info(f"[get_trade_dates] Completed in {end_time - start_time:.4f} seconds")
+
+        return formatted_dates
 
     # =========================
     # 📅 向后移动交易日
@@ -222,31 +275,67 @@ class MarketDataLoader:
     # =========================
     # 📈 获取未来收益（IC核心）
     # =========================
+
     def get_future_returns(self, date: str, horizon: int = 5):
         """
-        获取指定日期的未来收益。
+        获取指定日期的未来收益，只加载 Close 数据并计算未来收益。
         """
+        start_time = time.time()  # 记录函数总的开始时间
+        logger.info(f"开始获取未来收益 - {pd.to_datetime(date)} | Horizon: {horizon}天")
+
+        # 步骤 1: 获取未来日期
+        step_start = time.time()
         future_date = self.shift_trading_date(date, horizon)
-
         if future_date is None:
+            logger.warning(f"未找到有效的未来日期，返回空的DataFrame。")
             return pd.DataFrame()
+        step_end = time.time()
+        logger.info(f"获取未来日期耗时：{step_end - step_start:.4f}秒")
 
+        # 步骤 2: 获取所有股票代码
+        step_start = time.time()
         symbols = self.get_all_symbols()
+        logger.info(f"股票池加载完成，股票数量：{len(symbols)}")
+        step_end = time.time()
+        logger.info(f"获取股票池耗时：{step_end - step_start:.4f}秒")
 
-        df_t = self.load_multiple(symbols, end_date=date)
-        df_t1 = self.load_multiple(symbols, end_date=future_date)
+        # 步骤 3: 加载历史数据（仅加载 Close 列）
+        step_start = time.time()
+        logger.info(f"开始加载历史数据：{pd.to_datetime(date)}")
+        df_t = self.load_multiple(symbols, start_date=date, end_date=date, load_columns=["Close"])
+        step_end = time.time()
+        logger.info(f"历史数据加载完成，数据条数：{len(df_t)}，耗时：{step_end - step_start:.4f}秒")
 
-        snap_t = df_t[df_t.index == pd.to_datetime(date)][["Symbol", "Close"]]
-        snap_t1 = df_t1[df_t1.index == pd.to_datetime(future_date)][["Symbol", "Close"]]
+        # 步骤 4: 加载未来数据（仅加载 Close 列）
+        step_start = time.time()
+        logger.info(f"开始加载未来数据：{pd.to_datetime(future_date)}")
+        df_t1 = self.load_multiple(symbols, start_date=future_date, end_date=future_date, load_columns=["Close"])
+        step_end = time.time()
+        logger.info(f"未来数据加载完成，数据条数：{len(df_t1)}，耗时：{step_end - step_start:.4f}秒")
 
-        merged = snap_t.merge(
-            snap_t1,
+        # 步骤 5: 合并数据
+        step_start = time.time()
+        logger.info(f"开始合并数据：历史与未来数据按 Symbol 合并")
+        merged = df_t.merge(
+            df_t1,
             on="Symbol",
             suffixes=("_t", "_t1")
         )
+        step_end = time.time()
+        logger.info(f"数据合并耗时：{step_end - step_start:.4f}秒")
 
+        # 步骤 6: 计算未来收益
+        step_start = time.time()
+        logger.info(f"开始计算未来收益：{horizon}天")
         merged[f"ret_{horizon}d"] = (
             merged["Close_t1"] / merged["Close_t"] - 1
         )
+        step_end = time.time()
+        logger.info(f"计算未来收益耗时：{step_end - step_start:.4f}秒")
 
+        # 总结：返回结果并记录总耗时
+        end_time = time.time()
+        logger.info(f"返回结果，包含未来收益数据：{len(merged)}")
+        logger.info(f"函数执行总耗时：{end_time - start_time:.4f}秒")
+        
         return merged[["Symbol", f"ret_{horizon}d"]]

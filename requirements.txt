@@ -35,6 +35,8 @@ pre-commit>=3.0.0
 
 python-dotenv>=0.19.0
 
+dask>=2026.3.0
+
 # 可选：实盘接口（根据需求安装）
 # qmt-python  # 迅投 QMT
 # huatai-api  # 华泰证券

@@ -213,15 +213,21 @@ def run_factor_ic(args):
     logger.info("=" * 50)
     logger.info("[Factor IC] Start")
 
+    start_time = time.time()
     data_loader = MarketDataLoader()
     engine = CrossSectionalEngine(data_loader)
+    logger.info(f"[IC] Initialized data loader and engine in {time.time() - start_time:.4f} seconds")
 
     # 获取股票池
     universe_loader = UniverseLoader()
+    start_time = time.time()
     stock_list = universe_loader.get_universe(limit=args.limit)
+    logger.info(f"[IC] Loaded universe in {time.time() - start_time:.4f} seconds")
 
     # 获取交易日列表
+    start_time = time.time()
     dates = data_loader.get_trade_dates(args.start, args.end)
+    logger.info(f"[IC] Retrieved trade dates in {time.time() - start_time:.4f} seconds")
     if not dates:
         logger.error("[IC] No trade dates in range")
         return
@@ -230,39 +236,37 @@ def run_factor_ic(args):
     # 🚀 关键优化：一次性加载整个区间的面板数据
     # =========================
     logger.info(f"[IC] Preloading panel from {args.start} to {args.end} for {len(stock_list)} stocks")
-    
     start_time = time.time()
-    
     panel = data_loader.load_panel(args.start, args.end, stock_list)
     if panel.empty:
         logger.error("[IC] Panel is empty")
         return
-
-    end_time = time.time()
-    logger.info(f"Loading panel took {end_time - start_time:.4f} seconds")
+    logger.info(f"[IC] Loaded panel data in {time.time() - start_time:.4f} seconds")
 
     # 确定因子列表
+    start_time = time.time()
     factors, source = resolve_factors(args, engine)
-    logger.info(f"[IC] factors = {factors}")
-    logger.info(f"[IC] source = {source}")
+    logger.info(f"[IC] Resolved factors in {time.time() - start_time:.4f} seconds: {factors}")
+    logger.info(f"[IC] Source = {source}")
 
     all_ic = []
 
     for date_str in dates:
         date = pd.to_datetime(date_str)
-        logger.info(f"[IC] {date_str}")
+        logger.info(f"[IC] Processing {date_str}")
 
         # =========================
         # 从预加载面板中提取截至当前日期的历史数据
         # =========================
+        start_time = time.time()
         hist_df = panel[panel.index <= date].copy()
+        logger.info(f"[IC] Extracted historical data in {time.time() - start_time:.4f} seconds")
 
         if hist_df.empty:
             continue
 
-        start_time = time.time()
-
         # 调用 engine.run，传入预加载的数据
+        start_time = time.time()
         try:
             _, df = engine.run(
                 date=date,
@@ -272,21 +276,26 @@ def run_factor_ic(args):
                 top_n=None,
                 df=hist_df  # 关键：传入预加载数据
             )
+            logger.info(f"[IC] Engine run completed in {time.time() - start_time:.4f} seconds")
 
             if df is None or df.empty:
                 continue
 
             # 获取未来收益（也需要预加载优化，但先保持原样）
+            start_time = time.time()
             future_ret = data_loader.get_future_returns(date_str, horizon=args.horizon)
-
+            logger.info(f"[IC] Retrieved future returns in {time.time() - start_time:.4f} seconds")
             if future_ret.empty:
                 continue
 
+            # 合并数据
+            start_time = time.time()
             merged = df.merge(future_ret, on="Symbol", how="inner")
-
+            logger.info(f"[IC] Merged data in {time.time() - start_time:.4f} seconds")
             if len(merged) < 5:
                 continue
 
+            # 计算 IC
             factor_cols = []
             for f in factors:
                 if f"{f}_z" in merged.columns:
@@ -294,12 +303,14 @@ def run_factor_ic(args):
                 elif f in merged.columns:
                     factor_cols.append(f)
 
+            start_time = time.time()
             ic_dict = compute_snapshot_ic(
                 merged,
                 factor_cols=factor_cols,
                 ret_col=f"ret_{args.horizon}d",
                 method="spearman"
             )
+            logger.info(f"[IC] IC computation completed in {time.time() - start_time:.4f} seconds")
 
             for f, ic in ic_dict.items():
                 all_ic.append({
@@ -325,19 +336,23 @@ def run_factor_ic(args):
     print("\n=== IC Time Series (tail) ===")
     print(ic_df.tail())
 
+    start_time = time.time()
     summary = summarize_ic(ic_df)
+    logger.info(f"[IC] Summarized IC results in {time.time() - start_time:.4f} seconds")
 
     print("\n=== IC Summary ===")
     print(summary)
 
     if args.save:
         Path("outputs").mkdir(exist_ok=True)
+        start_time = time.time()
         ic_df.to_csv(f"outputs/ic_{args.start}_{args.end}.csv", index=False)
         summary.to_csv(f"outputs/ic_summary_{args.start}_{args.end}.csv", index=False)
+        logger.info(f"[IC] Saved IC results to CSV in {time.time() - start_time:.4f} seconds")
 
     logger.info("[Factor IC] Done")
     logger.info("=" * 50)
-
+    
 # =========================
 # 🧩 CLI 注册
 # =========================

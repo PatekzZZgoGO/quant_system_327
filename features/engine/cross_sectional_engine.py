@@ -150,11 +150,13 @@ class CrossSectionalEngine:
         # =========================
         # 1️⃣ 数据加载（如果有预加载数据则跳过）
         # =========================
+        start_time = time.time()
         if df is None:
             logger.info(f"[Engine] Loading data for {len(universe)} stocks at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
             df = self.data_loader.load_multiple(universe)
         else:
             df = df.copy()
+        logger.info(f"[Engine] Loaded data in {time.time() - start_time:.4f} seconds")
 
         if df is None or df.empty:
             logger.warning("[Engine] empty data")
@@ -165,8 +167,10 @@ class CrossSectionalEngine:
         # =========================
         # 2️⃣ 防未来函数
         # =========================
+        start_time = time.time()
         date = pd.to_datetime(date)
         df = df[df.index <= date]
+        logger.info(f"[Engine] Data filtered by date in {time.time() - start_time:.4f} seconds")
 
         if df.empty:
             logger.warning("[Engine] no history")
@@ -175,13 +179,24 @@ class CrossSectionalEngine:
         # =========================
         # 3️⃣ 因子计算（pipeline）
         # =========================
+        start_time = time.time()
         if factors is not None:
             factor_list = factors
         else:
             if weights is None:
-                factor_list = []
-            else:
-                factor_list = list(weights.keys())
+                if model is None and factors is not None:
+                    weights = {f: 0.0 for f in factors}
+                elif model is not None:
+                    if hasattr(model, "get_weights"):
+                        weights = model.get_weights(date)
+                    elif hasattr(model, "WEIGHTS"):
+                        weights = model.WEIGHTS
+                    else:
+                        raise ValueError("[Engine] model has no weights")
+                else:
+                    raise ValueError("[Engine] need weights or model or factors")
+            factor_list = list(weights.keys())
+        logger.info(f"[Engine] Resolved factors in {time.time() - start_time:.4f} seconds")
 
         if not factor_list:
             logger.warning("[Engine] no factors to compute")
@@ -189,12 +204,16 @@ class CrossSectionalEngine:
 
         # 计算因子
         logger.info(f"[Engine] Computing factors at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
+        start_time = time.time()
         df = self.pipeline.run(df, factors=factor_list)
+        logger.info(f"[Engine] Computed factors in {time.time() - start_time:.4f} seconds")
 
         # =========================
         # 4️⃣ 横截面提取
         # =========================
+        start_time = time.time()
         snapshot = self.get_snapshot(df, date)
+        logger.info(f"[Engine] Extracted snapshot in {time.time() - start_time:.4f} seconds")
 
         if snapshot.empty:
             logger.warning(f"[Engine] no snapshot for {date}")
@@ -203,11 +222,14 @@ class CrossSectionalEngine:
         # =========================
         # 5️⃣ 缺失处理
         # =========================
+        start_time = time.time()
         snapshot = self.handle_missing(snapshot, factor_list)
+        logger.info(f"[Engine] Handled missing data in {time.time() - start_time:.4f} seconds")
 
         # =========================
         # 6️⃣ 确定权重（用于打分）
         # =========================
+        start_time = time.time()
         if weights is None:
             if model is not None:
                 if hasattr(model, "get_weights"):
@@ -220,6 +242,7 @@ class CrossSectionalEngine:
                 weights = {f: 0.0 for f in factors}
             else:
                 raise ValueError("[Engine] need weights or model or factors")
+        logger.info(f"[Engine] Resolved weights in {time.time() - start_time:.4f} seconds")
 
         if not weights:
             logger.warning("[Engine] weights is empty")
@@ -228,12 +251,16 @@ class CrossSectionalEngine:
         # =========================
         # 7️⃣ 打分
         # =========================
+        start_time = time.time()
         snapshot = self.score(snapshot, weights)
+        logger.info(f"[Engine] Scored in {time.time() - start_time:.4f} seconds")
 
         # =========================
         # 8️⃣ 排序 + 选股
         # =========================
+        start_time = time.time()
         snapshot = snapshot.sort_values('score', ascending=False)
+        logger.info(f"[Engine] Sorted snapshot in {time.time() - start_time:.4f} seconds")
 
         if top_n is None:
             selected = snapshot
