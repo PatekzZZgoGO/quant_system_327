@@ -5,13 +5,15 @@ from pathlib import Path
 import importlib
 import time
 
+# ✅ 替换旧 engine
+from features.engine.factor_engine import FactorEngine
+from features.engine.scoring_engine import ScoringEngine
 
-from features.engine.cross_sectional_engine import CrossSectionalEngine
 from data.loaders.market_loader import MarketDataLoader
 from data.loaders.universe_loader import UniverseLoader
 
 # 👉 IC 模块
-from features.analysis.ic import (
+from features.analysis.ic_temp import (
     summarize_ic,
     compute_snapshot_ic,
     compute_rank_corr
@@ -34,7 +36,7 @@ def load_model(name: str):
 # =========================
 # 🧠 factor 解析（核心）
 # =========================
-def resolve_factors(args, engine):
+def resolve_factors(args, factor_engine):
 
     # 1️⃣ 用户指定
     if args.factors:
@@ -58,7 +60,7 @@ def resolve_factors(args, engine):
 
     # 3️⃣ 全量（正确）
     logger.info("[resolve_factors] Using all available factors from registry")
-    return engine.pipeline.registry.list_factors(), "registry"
+    return factor_engine.pipeline.registry.list_factors(), "registry"
 
 # =========================
 # 🚀 主执行函数
@@ -71,7 +73,8 @@ def run_factor(args):
     # 1️⃣ 初始化（只负责读 parquet）
     # =========================
     data_loader = MarketDataLoader()
-    engine = CrossSectionalEngine(data_loader)
+    factor_engine = FactorEngine(data_loader)
+    scoring_engine = ScoringEngine()
 
     # =========================
     # 2️⃣ 加载模型
@@ -122,22 +125,44 @@ def run_factor(args):
     logger.info(f"[Factor] universe size = {len(stock_list)}")
 
     # =========================
-    # 5️⃣ 运行引擎
+    # 5️⃣ 数据加载（替代 engine 内部加载）
     # =========================
-    logger.info(f"[Factor] Running engine with {len(stock_list)} stocks")
-    selected, df = engine.run(
+    logger.info(f"[Factor] Loading panel data")
+    panel = data_loader.load_panel(
+        start_date="2000-01-01",
+        end_date=date,
+        symbols=stock_list
+    )
+
+    if panel is None or panel.empty:
+        logger.warning("[Factor] empty panel")
+        return
+
+    panel["Date"] = pd.to_datetime(panel["Date"])
+    panel = panel.sort_values(["Date", "Symbol"])
+    panel = panel.set_index("Date")
+
+    # =========================
+    # 6️⃣ 因子计算（替代 engine.run）
+    # =========================
+    snapshot = factor_engine.run_factor_pipeline(
+        df=panel,
         date=date,
-        universe=stock_list,
-        model=model,
-        top_n=args.top_n,
+        factors=list(weights.keys())
     )
 
     # =========================
-    # 6️⃣ 防空
+    # 7️⃣ 防空
     # =========================
-    if selected is None or selected.empty:
+    if snapshot is None or snapshot.empty:
         logger.warning("[Factor] no stocks selected")
         return
+
+    # =========================
+    # 8️⃣ 打分（拆出来）
+    # =========================
+    scored = scoring_engine.score(snapshot, weights)
+    selected = scoring_engine.select(scored, args.top_n)
 
     # =========================
     # 7️⃣ 输出结果
@@ -175,12 +200,12 @@ def run_factor(args):
     # 8️⃣ Debug 信息
     # =========================
     print("\n=== Debug Info ===")
-    print(f"Total candidates: {len(df)}")
+    print(f"Total candidates: {len(scored)}")
     print(f"Selected: {len(selected)}")
 
-    if "score" in df.columns:
+    if "score" in scored.columns:
         print(
-            f"Score range: {df['score'].min():.4f} ~ {df['score'].max():.4f}"
+            f"Score range: {scored['score'].min():.4f} ~ {scored['score'].max():.4f}"
         )
 
     print("\n=== Factor Stats ===")
@@ -194,7 +219,7 @@ def run_factor(args):
     # Rank Corr
     # =========================
     rank_corr = compute_rank_corr(
-        df,
+        scored,
         target_col="score",
         factors=list(weights.keys())
     )
@@ -207,7 +232,7 @@ def run_factor(args):
     logger.info("=" * 50)
 
 # =========================
-# 🚀 IC（重构版）
+# 🚀 IC
 # =========================
 def run_factor_ic(args):
     logger.info("=" * 50)
@@ -216,7 +241,7 @@ def run_factor_ic(args):
     total_start_time = time.time()
 
     data_loader = MarketDataLoader()
-    engine = CrossSectionalEngine(data_loader)
+    factor_engine = FactorEngine(data_loader)
 
     logger.info("[IC] Initialized data loader and engine")
 
@@ -228,20 +253,15 @@ def run_factor_ic(args):
     logger.info(f"[IC] Loaded universe: {len(stock_list)} stocks")
 
     # =========================
-    # 交易日（主区间）
+    # 🚀 交易日（改为从 panel 提取）
     # =========================
-    dates = data_loader.get_trade_dates(args.start, args.end)
-
-    if not dates:
-        logger.error("[IC] No trade dates in range")
-        return
-
-    logger.info(f"[IC] Trade dates count: {len(dates)}")
+    logger.info("[IC] Extracting trade dates from panel (NO get_trade_dates)")
+    dates = None  # 占位，后面从 panel 生成
 
     # =========================
-    # 🚀 关键修复：直接加载带 buffer 的 panel
+    # 🚀 加载 panel（带 buffer）
     # =========================
-    buffer_days = args.horizon * 3  # 防止未来数据不够（非常关键）
+    buffer_days = args.horizon * 3
 
     logger.info(f"[IC] Loading panel with buffer_days={buffer_days}")
 
@@ -255,65 +275,45 @@ def run_factor_ic(args):
         logger.error("[IC] Panel is empty")
         return
 
-    # =========================
-    # 标准化 panel
-    # =========================
     panel["Date"] = pd.to_datetime(panel["Date"])
-    panel = panel.sort_values(["Symbol", "Date"]).reset_index(drop=True)
-
-    logger.info(f"[IC] Panel shape: {panel.shape}")
+    panel = panel.sort_values(["Symbol", "Date"])
 
     # =========================
-    # 🚀 从 panel 提取交易日（完全替代 get_trade_dates(None)）
+    # 🚀 从 panel 提取交易日（替代 get_trade_dates）
     # =========================
-    trade_dates = sorted(panel["Date"].unique())
-    trade_dates = pd.to_datetime(trade_dates)
+    all_dates = sorted(panel["Date"].unique())
+    all_dates = pd.to_datetime(all_dates)
 
-    if len(trade_dates) == 0:
-        logger.error("[IC] No trade dates in panel")
+    start_dt = pd.to_datetime(args.start)
+    end_dt = pd.to_datetime(args.end)
+
+    # 只保留目标区间
+    dates = [d for d in all_dates if start_dt <= d <= end_dt]
+
+    if not dates:
+        logger.error("[IC] No trade dates in panel range")
         return
 
-    # 当前区间最后一天
-    end_date = pd.to_datetime(dates[-1])
-
-    # 找 index（避免精度问题）
-    idx = trade_dates.searchsorted(end_date)
-
-    if idx >= len(trade_dates) or trade_dates[idx] != end_date:
-        logger.warning("[IC] end_date not exact match, using nearest previous date")
-        idx = idx - 1
-
-    if idx < 0:
-        logger.error("[IC] Cannot locate end_date in panel")
-        return
-
-    # =========================
-    # 🚀 推未来 horizon
-    # =========================
-    target_idx = idx + args.horizon
-
-    if target_idx >= len(trade_dates):
-        logger.error("[IC] Not enough future data for given horizon")
-        return
-
-    extended_end = trade_dates[target_idx]
-
-    logger.info(f"[IC] Extended end_date: {extended_end}")
-
-    # =========================
-    # 🚀 截取最终 panel（只保留需要区间）
-    # =========================
-    panel = panel[
-        (panel["Date"] >= pd.to_datetime(args.start)) &
-        (panel["Date"] <= extended_end)
-    ]
+    logger.info(f"[IC] Trade dates count (from panel): {len(dates)}")
 
     # =========================
     # 因子解析
     # =========================
-    factors, source = resolve_factors(args, engine)
+    factors, source = resolve_factors(args, factor_engine)
     logger.info(f"[IC] Factors: {factors}")
     logger.info(f"[IC] Source: {source}")
+
+    # =========================
+    # 🚀 一次性计算所有因子（核心优化）
+    # =========================
+    logger.info("[IC] Computing ALL factors on full panel (ONCE)")
+
+    panel = factor_engine.pipeline.run(
+        panel.set_index("Date"),
+        factors=factors
+    ).reset_index()
+
+    logger.info(f"[IC] Factor panel shape: {panel.shape}")
 
     # =========================
     # 🚀 未来收益（一次性）
@@ -334,7 +334,7 @@ def run_factor_ic(args):
     logger.info(f"[IC] Future returns shape: {future_returns_df.shape}")
 
     # =========================
-    # IC 主循环
+    # IC 主循环（🔥不再重复算因子）
     # =========================
     all_ic = []
 
@@ -342,44 +342,19 @@ def run_factor_ic(args):
         date = pd.to_datetime(date_str)
         logger.info(f"[IC] Processing {date_str}")
 
-        # =========================
-        # 历史数据（不能包含未来）
-        # =========================
-        hist_df = panel[panel["Date"] <= date].copy()
-
-        if hist_df.empty:
-            continue
-
-        # =========================
-        # 🚀 关键修复：设置 DatetimeIndex
-        # =========================
-        hist_df["Date"] = pd.to_datetime(hist_df["Date"])
-
-        # ⚠️ 必须排序（engine 很可能依赖）
-        hist_df = hist_df.sort_values(["Date", "Symbol"])
-
-        # 设置 index（核心）
-        hist_df = hist_df.set_index("Date")
-
-        # 再保险（防止类型问题）
-        if not isinstance(hist_df.index, pd.DatetimeIndex):
-            raise ValueError("[IC] hist_df index is not DatetimeIndex after conversion")
-
         try:
             # =========================
-            # 因子计算
+            # 🚀 直接取当天截面（不再算因子）
             # =========================
-            _, df = engine.run(
-                date=date,
-                universe=stock_list,
-                model=None,
-                factors=factors,
-                top_n=None,
-                df=hist_df
-            )
+            snapshot = panel[panel["Date"] == date].copy()
 
-            if df is None or df.empty:
+            if snapshot is None or snapshot.empty:
                 continue
+
+            # =========================
+            # 缺失处理（保留）
+            # =========================
+            snapshot = factor_engine.handle_missing(snapshot, factors)
 
             # =========================
             # 未来收益截面
@@ -394,7 +369,7 @@ def run_factor_ic(args):
             # =========================
             # merge（必须 Date + Symbol）
             # =========================
-            merged = df.merge(
+            merged = snapshot.merge(
                 future_ret,
                 on=["Date", "Symbol"],
                 how="inner"
