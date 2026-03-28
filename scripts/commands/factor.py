@@ -213,42 +213,129 @@ def run_factor_ic(args):
     logger.info("=" * 50)
     logger.info("[Factor IC] Start")
 
-    start_time = time.time()
+    total_start_time = time.time()
+
     data_loader = MarketDataLoader()
     engine = CrossSectionalEngine(data_loader)
-    logger.info(f"[IC] Initialized data loader and engine in {time.time() - start_time:.4f} seconds")
 
-    # 获取股票池
+    logger.info("[IC] Initialized data loader and engine")
+
+    # =========================
+    # 股票池
+    # =========================
     universe_loader = UniverseLoader()
-    start_time = time.time()
     stock_list = universe_loader.get_universe(limit=args.limit)
-    logger.info(f"[IC] Loaded universe in {time.time() - start_time:.4f} seconds")
+    logger.info(f"[IC] Loaded universe: {len(stock_list)} stocks")
 
-    # 获取交易日列表
-    start_time = time.time()
+    # =========================
+    # 交易日（主区间）
+    # =========================
     dates = data_loader.get_trade_dates(args.start, args.end)
-    logger.info(f"[IC] Retrieved trade dates in {time.time() - start_time:.4f} seconds")
+
     if not dates:
         logger.error("[IC] No trade dates in range")
         return
 
+    logger.info(f"[IC] Trade dates count: {len(dates)}")
+
     # =========================
-    # 🚀 关键优化：一次性加载整个区间的面板数据
+    # 🚀 关键修复：直接加载带 buffer 的 panel
     # =========================
-    logger.info(f"[IC] Preloading panel from {args.start} to {args.end} for {len(stock_list)} stocks")
-    start_time = time.time()
-    panel = data_loader.load_panel(args.start, args.end, stock_list)
+    buffer_days = args.horizon * 3  # 防止未来数据不够（非常关键）
+
+    logger.info(f"[IC] Loading panel with buffer_days={buffer_days}")
+
+    panel = data_loader.load_panel(
+        args.start,
+        pd.to_datetime(args.end) + pd.Timedelta(days=buffer_days),
+        stock_list
+    )
+
     if panel.empty:
         logger.error("[IC] Panel is empty")
         return
-    logger.info(f"[IC] Loaded panel data in {time.time() - start_time:.4f} seconds")
 
-    # 确定因子列表
-    start_time = time.time()
+    # =========================
+    # 标准化 panel
+    # =========================
+    panel["Date"] = pd.to_datetime(panel["Date"])
+    panel = panel.sort_values(["Symbol", "Date"]).reset_index(drop=True)
+
+    logger.info(f"[IC] Panel shape: {panel.shape}")
+
+    # =========================
+    # 🚀 从 panel 提取交易日（完全替代 get_trade_dates(None)）
+    # =========================
+    trade_dates = sorted(panel["Date"].unique())
+    trade_dates = pd.to_datetime(trade_dates)
+
+    if len(trade_dates) == 0:
+        logger.error("[IC] No trade dates in panel")
+        return
+
+    # 当前区间最后一天
+    end_date = pd.to_datetime(dates[-1])
+
+    # 找 index（避免精度问题）
+    idx = trade_dates.searchsorted(end_date)
+
+    if idx >= len(trade_dates) or trade_dates[idx] != end_date:
+        logger.warning("[IC] end_date not exact match, using nearest previous date")
+        idx = idx - 1
+
+    if idx < 0:
+        logger.error("[IC] Cannot locate end_date in panel")
+        return
+
+    # =========================
+    # 🚀 推未来 horizon
+    # =========================
+    target_idx = idx + args.horizon
+
+    if target_idx >= len(trade_dates):
+        logger.error("[IC] Not enough future data for given horizon")
+        return
+
+    extended_end = trade_dates[target_idx]
+
+    logger.info(f"[IC] Extended end_date: {extended_end}")
+
+    # =========================
+    # 🚀 截取最终 panel（只保留需要区间）
+    # =========================
+    panel = panel[
+        (panel["Date"] >= pd.to_datetime(args.start)) &
+        (panel["Date"] <= extended_end)
+    ]
+
+    # =========================
+    # 因子解析
+    # =========================
     factors, source = resolve_factors(args, engine)
-    logger.info(f"[IC] Resolved factors in {time.time() - start_time:.4f} seconds: {factors}")
-    logger.info(f"[IC] Source = {source}")
+    logger.info(f"[IC] Factors: {factors}")
+    logger.info(f"[IC] Source: {source}")
 
+    # =========================
+    # 🚀 未来收益（一次性）
+    # =========================
+    logger.info(f"[IC] Computing future returns (horizon={args.horizon})")
+
+    future_returns_df = data_loader.get_future_returns(
+        panel=panel,
+        horizon=args.horizon
+    )
+
+    if future_returns_df.empty:
+        logger.error("[IC] Future returns is empty")
+        return
+
+    future_returns_df["Date"] = pd.to_datetime(future_returns_df["Date"])
+
+    logger.info(f"[IC] Future returns shape: {future_returns_df.shape}")
+
+    # =========================
+    # IC 主循环
+    # =========================
     all_ic = []
 
     for date_str in dates:
@@ -256,46 +343,69 @@ def run_factor_ic(args):
         logger.info(f"[IC] Processing {date_str}")
 
         # =========================
-        # 从预加载面板中提取截至当前日期的历史数据
+        # 历史数据（不能包含未来）
         # =========================
-        start_time = time.time()
-        hist_df = panel[panel.index <= date].copy()
-        logger.info(f"[IC] Extracted historical data in {time.time() - start_time:.4f} seconds")
+        hist_df = panel[panel["Date"] <= date].copy()
 
         if hist_df.empty:
             continue
 
-        # 调用 engine.run，传入预加载的数据
-        start_time = time.time()
+        # =========================
+        # 🚀 关键修复：设置 DatetimeIndex
+        # =========================
+        hist_df["Date"] = pd.to_datetime(hist_df["Date"])
+
+        # ⚠️ 必须排序（engine 很可能依赖）
+        hist_df = hist_df.sort_values(["Date", "Symbol"])
+
+        # 设置 index（核心）
+        hist_df = hist_df.set_index("Date")
+
+        # 再保险（防止类型问题）
+        if not isinstance(hist_df.index, pd.DatetimeIndex):
+            raise ValueError("[IC] hist_df index is not DatetimeIndex after conversion")
+
         try:
+            # =========================
+            # 因子计算
+            # =========================
             _, df = engine.run(
                 date=date,
                 universe=stock_list,
                 model=None,
                 factors=factors,
                 top_n=None,
-                df=hist_df  # 关键：传入预加载数据
+                df=hist_df
             )
-            logger.info(f"[IC] Engine run completed in {time.time() - start_time:.4f} seconds")
 
             if df is None or df.empty:
                 continue
 
-            # 获取未来收益（也需要预加载优化，但先保持原样）
-            start_time = time.time()
-            future_ret = data_loader.get_future_returns(date_str, horizon=args.horizon)
-            logger.info(f"[IC] Retrieved future returns in {time.time() - start_time:.4f} seconds")
+            # =========================
+            # 未来收益截面
+            # =========================
+            future_ret = future_returns_df[
+                future_returns_df["Date"] == date
+            ]
+
             if future_ret.empty:
                 continue
 
-            # 合并数据
-            start_time = time.time()
-            merged = df.merge(future_ret, on="Symbol", how="inner")
-            logger.info(f"[IC] Merged data in {time.time() - start_time:.4f} seconds")
+            # =========================
+            # merge（必须 Date + Symbol）
+            # =========================
+            merged = df.merge(
+                future_ret,
+                on=["Date", "Symbol"],
+                how="inner"
+            )
+
             if len(merged) < 5:
                 continue
 
-            # 计算 IC
+            # =========================
+            # 因子列
+            # =========================
             factor_cols = []
             for f in factors:
                 if f"{f}_z" in merged.columns:
@@ -303,14 +413,15 @@ def run_factor_ic(args):
                 elif f in merged.columns:
                     factor_cols.append(f)
 
-            start_time = time.time()
+            # =========================
+            # IC 计算
+            # =========================
             ic_dict = compute_snapshot_ic(
                 merged,
                 factor_cols=factor_cols,
                 ret_col=f"ret_{args.horizon}d",
                 method="spearman"
             )
-            logger.info(f"[IC] IC computation completed in {time.time() - start_time:.4f} seconds")
 
             for f, ic in ic_dict.items():
                 all_ic.append({
@@ -324,9 +435,9 @@ def run_factor_ic(args):
             logger.exception(f"[IC] {date_str} failed")
             continue
 
-    end_time = time.time()
-    logger.info(f"Factor calculation took {end_time - start_time:.4f} seconds")
-
+    # =========================
+    # 汇总
+    # =========================
     ic_df = pd.DataFrame(all_ic)
 
     if ic_df.empty:
@@ -336,21 +447,23 @@ def run_factor_ic(args):
     print("\n=== IC Time Series (tail) ===")
     print(ic_df.tail())
 
-    start_time = time.time()
     summary = summarize_ic(ic_df)
-    logger.info(f"[IC] Summarized IC results in {time.time() - start_time:.4f} seconds")
 
     print("\n=== IC Summary ===")
     print(summary)
 
+    # =========================
+    # 保存
+    # =========================
     if args.save:
         Path("outputs").mkdir(exist_ok=True)
-        start_time = time.time()
+
         ic_df.to_csv(f"outputs/ic_{args.start}_{args.end}.csv", index=False)
         summary.to_csv(f"outputs/ic_summary_{args.start}_{args.end}.csv", index=False)
-        logger.info(f"[IC] Saved IC results to CSV in {time.time() - start_time:.4f} seconds")
 
-    logger.info("[Factor IC] Done")
+        logger.info("[IC] Results saved")
+
+    logger.info(f"[Factor IC] Done | total time: {time.time() - total_start_time:.4f}s")
     logger.info("=" * 50)
     
 # =========================
