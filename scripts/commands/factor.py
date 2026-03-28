@@ -3,6 +3,7 @@ import logging
 from typing import Dict, List, Tuple
 from pathlib import Path
 import importlib
+import time
 
 # ✅ engine
 from features.engine.factor_engine import FactorEngine
@@ -31,11 +32,70 @@ def load_model(name: str):
 
 
 # =========================
+# 🚀 Panel Cache（新增核心）
+# =========================
+def load_panel_with_cache(
+    data_loader,
+    stock_list,
+    date,
+    lookback_days=252 * 2
+):
+    """
+    🚀 工业级 panel 加载：
+
+    优化点：
+    - 限制历史窗口（避免 24 年数据）
+    - 本地缓存 parquet
+    """
+
+    cache_dir = Path("cache/panel")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    start_date = pd.to_datetime(date) - pd.Timedelta(days=lookback_days)
+    end_date = pd.to_datetime(date)
+
+    cache_file = cache_dir / f"panel_{start_date.date()}_{end_date.date()}_{len(stock_list)}.parquet"
+
+    # =========================
+    # ✅ cache 命中
+    # =========================
+    if cache_file.exists():
+        logger.info(f"[Factor] Loading panel from cache: {cache_file}")
+        panel = pd.read_parquet(cache_file)
+        return panel
+
+    # =========================
+    # ❌ cache miss → 加载
+    # =========================
+    logger.info("[Factor] Cache miss → loading panel from disk")
+
+    panel = data_loader.load_panel(
+        start_date=start_date,
+        end_date=end_date,
+        symbols=stock_list
+    )
+
+    if panel is None or panel.empty:
+        return panel
+
+    # =========================
+    # ✅ 写 cache
+    # =========================
+    panel.to_parquet(cache_file)
+
+    logger.info(f"[Factor] Panel cached → {cache_file}")
+
+    return panel
+
+
+# =========================
 # 🚀 主执行函数（选股）
 # =========================
 def run_factor(args):
     logger.info("=" * 50)
     logger.info("[Factor] Start running factor pipeline")
+
+    total_start_time = time.time()
 
     # =========================
     # 1️⃣ 初始化
@@ -95,13 +155,14 @@ def run_factor(args):
     logger.info(f"[Factor] universe size = {len(stock_list)}")
 
     # =========================
-    # 5️⃣ 数据加载
+    # 5️⃣ 🚀 数据加载（核心优化）
     # =========================
-    logger.info(f"[Factor] Loading panel data")
-    panel = data_loader.load_panel(
-        start_date="2000-01-01",
-        end_date=date,
-        symbols=stock_list
+    logger.info(f"[Factor] Loading panel data (optimized)")
+
+    panel = load_panel_with_cache(
+        data_loader=data_loader,
+        stock_list=stock_list,
+        date=date
     )
 
     if panel is None or panel.empty:
@@ -109,27 +170,47 @@ def run_factor(args):
         return
 
     panel["Date"] = pd.to_datetime(panel["Date"])
-    panel = panel.sort_values(["Date", "Symbol"])
-    panel = panel.set_index("Date")
+    panel = panel.sort_values(["Symbol", "Date"])
+
+    logger.info(f"[Factor] Panel shape = {panel.shape}")
 
     # =========================
-    # 6️⃣ 因子计算
+    # 6️⃣ 🚀 一次性计算所有因子（核心优化）
     # =========================
-    snapshot = factor_engine.run_factor_pipeline(
-        df=panel,
-        date=date,
+    logger.info("[Factor] Computing ALL factors on full panel (ONCE)")
+
+    panel = factor_engine.pipeline.run(
+        panel.set_index("Date"),
+        factors=list(weights.keys())
+    ).reset_index()
+
+    logger.info(f"[Factor] Factor panel shape = {panel.shape}")
+
+    # =========================
+    # 7️⃣ 🚀 全局 missing 处理（和 IC 一致）
+    # =========================
+    logger.info("[Factor] Handling missing data (global)")
+
+    panel = factor_engine.handle_missing(
+        panel,
         factors=list(weights.keys())
     )
 
     # =========================
-    # 7️⃣ 防空
+    # 8️⃣ 🚀 snapshot（只在最后切片）
     # =========================
-    if snapshot is None or snapshot.empty:
-        logger.warning("[Factor] no stocks selected")
+    logger.info(f"[Factor] Extracting snapshot @ {date}")
+
+    snapshot = panel[panel["Date"] == date]
+
+    if snapshot.empty:
+        logger.warning("[Factor] snapshot is empty")
         return
 
+    logger.info(f"[Factor] Snapshot size = {len(snapshot)}")
+
     # =========================
-    # 8️⃣ 打分
+    # 9️⃣ 打分
     # =========================
     scored = scoring_engine.score(snapshot, weights)
     selected = scoring_engine.select(scored, args.top_n)
@@ -186,7 +267,7 @@ def run_factor(args):
         print(f"  std      = {selected[c].std():.4f}")
 
     # =========================
-    # Rank Corr
+    # Rank Corr（调试用）
     # =========================
     rank_corr = compute_rank_corr(
         scored,
@@ -198,7 +279,9 @@ def run_factor(args):
     for k, v in rank_corr.items():
         print(f"{k}: {v:.4f}")
 
-    logger.info("[Factor] Done")
+    logger.info(
+        f"[Factor] Done | total time: {time.time() - total_start_time:.4f}s"
+    )
     logger.info("=" * 50)
 
 
