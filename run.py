@@ -64,7 +64,7 @@ def auto_register_commands(subparsers):
 
             if hasattr(module, "register"):
                 module.register(subparsers)
-                print(f"[✔] Loaded command: {file.stem}")
+                print(f"[OK] Loaded command: {file.stem}")
             else:
                 print(f"[WARN] {file.stem} has no register()")
 

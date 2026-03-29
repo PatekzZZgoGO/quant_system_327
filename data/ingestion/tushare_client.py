@@ -588,64 +588,117 @@ class TushareDataFetcher:
             self.pro = None
             self.tushare_points = 0
 
+    def _normalize_date_range(self, start_date: str, end_date: str = None) -> Tuple[str, str]:
+        if end_date is None:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+        return str(start_date).replace('-', ''), str(end_date).replace('-', '')
+
+    def _resolve_effective_end_date(self, end_date: str) -> str:
+        effective_end = pd.to_datetime(str(end_date), format='%Y%m%d')
+        now = datetime.now()
+
+        if effective_end.date() >= now.date() and now.hour < 18:
+            effective_end -= pd.Timedelta(days=1)
+
+        while effective_end.weekday() >= 5:
+            effective_end -= pd.Timedelta(days=1)
+
+        return effective_end.strftime('%Y%m%d')
+
+    def _storage_date(self, trade_date: str) -> pd.Timestamp:
+        return pd.to_datetime(str(trade_date), format='%Y%m%d') + pd.Timedelta(days=1)
+
+    def _load_cached_frame(self, cache_file: Path) -> pd.DataFrame:
+        df = pd.read_parquet(cache_file)
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        return df.sort_index()
+
+    def _get_incremental_fetch_start(
+        self,
+        cached_df: pd.DataFrame,
+        start_date: str,
+        end_date: str,
+    ) -> Optional[str]:
+        if cached_df.empty:
+            return start_date
+
+        cached_max = cached_df.index.max()
+        requested_end = self._storage_date(end_date)
+        if cached_max >= requested_end:
+            return None
+
+        requested_start = pd.to_datetime(start_date, format='%Y%m%d')
+        incremental_start = max(requested_start, cached_max)
+        return incremental_start.strftime('%Y%m%d')
+
+    def _merge_frames(self, cached_df: pd.DataFrame, fresh_df: pd.DataFrame) -> pd.DataFrame:
+        frames = [df for df in (cached_df, fresh_df) if df is not None and not df.empty]
+        if not frames:
+            return pd.DataFrame()
+
+        merged = pd.concat(frames)
+        if not isinstance(merged.index, pd.DatetimeIndex):
+            merged.index = pd.to_datetime(merged.index)
+        merged = merged[~merged.index.duplicated(keep='last')]
+        return merged.sort_index()
+
     def fetch_historical_data(self, start_date: str, end_date: str = None,
                               use_cache: bool = True, force_refresh: bool = False) -> pd.DataFrame:
         if not self.symbol:
-            raise ValueError("请先设置股票代码")
+            raise ValueError("stock symbol is required")
 
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
-
-        # ⚠️ 防御性编程：确保 start_date / end_date 一定是字符串
-        # 很多配置文件（yaml/json）会把 20200101 解析成 int，必须强转
-        start_date = str(start_date)
-        end_date = str(end_date)
-
-        # 去掉 '-'，统一转为 tushare 需要的 YYYYMMDD 格式
-        start_fmt = start_date.replace('-', '')
-        end_fmt = end_date.replace('-', '')
-
+        start_fmt, end_fmt = self._normalize_date_range(start_date, end_date)
+        end_fmt = self._resolve_effective_end_date(end_fmt)
         cache_file = self._get_stock_cache_path(self.symbol)
+        cached_df = pd.DataFrame()
+        fetch_start = start_fmt
 
-        # 从缓存加载
         if use_cache and not force_refresh and cache_file.exists():
-            print(f"📂 从缓存加载：{self.symbol}")
+            print(f"Load cached price data: {self.symbol}")
             try:
-                # ✅ 直接读取，索引会被自动恢复为保存时的索引（datetime）
-                df = pd.read_parquet(cache_file)
-                # 确保索引是 datetime 类型（如果读取后不是，手动转换）
-                if not isinstance(df.index, pd.DatetimeIndex):
-                    df.index = pd.to_datetime(df.index)
-                if not df.empty:
-                    return df
-                # 如果数据为空，直接返回空
-                if df.empty:
-                    print("   缓存为空")
-                    df = pd.DataFrame()
+                cached_df = self._load_cached_frame(cache_file)
+                if cached_df.empty:
+                    print("   cached file is empty")
                 else:
-                    print(f"✅ 加载成功：{len(df)} 条记录")
-                    # 增量更新逻辑保持不变（注意：df.index 现在是 datetime）
-                    # ...
+                    fetch_start = self._get_incremental_fetch_start(cached_df, start_fmt, end_fmt)
+                    if fetch_start is None:
+                        return cached_df
             except Exception as e:
-                self.monitor.log_error(self.symbol, f"缓存读取失败：{e}")
-                print(f"⚠️ 缓存读取失败：{e}")
-                df = pd.DataFrame()
+                self.monitor.log_error(self.symbol, f"cache read failed: {e}")
+                print(f"Cache read failed: {e}")
+                cached_df = pd.DataFrame()
+                fetch_start = start_fmt
 
-        # 从 API 获取
-        print(f"📡 从 Tushare 获取：{self.symbol}")
+        if fetch_start != start_fmt:
+            print(f"Incremental update {self.symbol}: {fetch_start} -> {end_fmt}")
+
+        if fetch_start > end_fmt:
+            if not cached_df.empty:
+                print(f"No new trading-day data for {self.symbol}; keep cached price data")
+                return cached_df
+            return pd.DataFrame()
+
+        print(f"Fetch price data from Tushare: {self.symbol}")
         start_time = time.time()
-        df = self._fetch_from_api(self.symbol, start_fmt, end_fmt)
+        df = self._fetch_from_api(self.symbol, fetch_start, end_fmt)
         duration = time.time() - start_time
 
         if df is None or df.empty:
-            self.monitor.log_error(self.symbol, "API 获取失败或返回空数据")
-            print("⚠️ API 获取失败")
+            if not cached_df.empty:
+                self.monitor.log_warning(self.symbol, "incremental update failed; keep local cache")
+                return cached_df
+            self.monitor.log_error(self.symbol, "API fetch failed or returned empty data")
+            print("API fetch failed")
             return pd.DataFrame()
+
+        df = self._merge_frames(cached_df, df)
 
         if use_cache:
             self._save_to_cache(df, cache_file)
-            if self.cache_manager:
-                self.cache_manager.update_meta(self.symbol, end_fmt, len(df))
+            if self.cache_manager and not df.empty:
+                last_trade_date = (df.index.max() - pd.Timedelta(days=1)).strftime('%Y%m%d')
+                self.cache_manager.update_meta(self.symbol, last_trade_date, len(df))
 
         self.monitor.log_success(self.symbol, len(df), duration)
         return df
@@ -659,80 +712,69 @@ class TushareDataFetcher:
     ) -> pd.DataFrame:
 
         if not self.symbol:
-            raise ValueError("请先设置股票代码")
+            raise ValueError("stock symbol is required")
 
-        start_fmt = str(start_date).replace('-', '')
-        end_fmt = str(end_date).replace('-', '')
-
+        start_fmt, end_fmt = self._normalize_date_range(start_date, end_date)
+        end_fmt = self._resolve_effective_end_date(end_fmt)
         cache_file = self._get_basic_cache_path(self.symbol)
+        cached_df = pd.DataFrame()
+        fetch_start = start_fmt
 
-        # =========================
-        # 📂 1. 从缓存加载
-        # =========================
         if use_cache and not force_refresh and cache_file.exists():
             try:
-                df = pd.read_parquet(cache_file)
-
-                if not isinstance(df.index, pd.DatetimeIndex):
-                    df.index = pd.to_datetime(df.index)
-
-                if not df.empty:
-                    print(f"📂 daily_basic缓存加载成功: {self.symbol} ({len(df)}条)")
-                    return df
-
+                cached_df = self._load_cached_frame(cache_file)
+                if not cached_df.empty:
+                    fetch_start = self._get_incremental_fetch_start(cached_df, start_fmt, end_fmt)
+                    if fetch_start is None:
+                        return cached_df
             except Exception as e:
-                self.monitor.log_warning(self.symbol, f"basic缓存读取失败: {e}")
+                self.monitor.log_warning(self.symbol, f"basic cache read failed: {e}")
+                cached_df = pd.DataFrame()
+                fetch_start = start_fmt
 
-        # =========================
-        # 📡 2. 从 API 获取
-        # =========================
-        print(f"📡 获取 daily_basic: {self.symbol}")
+        if fetch_start != start_fmt:
+            print(f"Incremental update daily_basic {self.symbol}: {fetch_start} -> {end_fmt}")
 
+        if fetch_start > end_fmt:
+            if not cached_df.empty:
+                print(f"No new trading-day daily_basic for {self.symbol}; keep cached data")
+                return cached_df
+            return pd.DataFrame()
+
+        print(f"Fetch daily_basic from Tushare: {self.symbol}")
         start_time = time.time()
 
         df = self.fetcher.fetch_daily_basic_with_retry(
             ts_code=self.symbol,
-            start_date=start_fmt,
+            start_date=fetch_start,
             end_date=end_fmt
         )
 
         duration = time.time() - start_time
 
         if df is None or df.empty:
-            self.monitor.log_error(self.symbol, "daily_basic 获取失败")
+            if not cached_df.empty:
+                self.monitor.log_warning(self.symbol, "daily_basic incremental update failed; keep local cache")
+                return cached_df
+            self.monitor.log_error(self.symbol, "daily_basic fetch failed")
             return pd.DataFrame()
 
-        # =========================
-        # 🧹 3. 数据清洗
-        # =========================
         df = self._clean_daily_basic(df)
+        df = self._merge_frames(cached_df, df)
 
-        # =========================
-        # ⚠️ 4. 单位修复（非常重要）
-        # =========================
         if 'TotalMV' in df.columns:
-            df['TotalMV'] = df['TotalMV'] * 10000  # 万元 → 元
+            df['TotalMV'] = df['TotalMV'] * 10000
 
-        # =========================
-        # 🏷️ 5. 加 symbol（统一格式）
-        # =========================
         df['Symbol'] = self.symbol
 
-        # =========================
-        # 💾 6. 保存缓存
-        # =========================
         if use_cache:
             try:
                 cache_file.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(cache_file)
             except Exception as e:
-                self.monitor.log_warning(self.symbol, f"basic缓存保存失败: {e}")
+                self.monitor.log_warning(self.symbol, f"basic cache save failed: {e}")
 
-        # =========================
-        # 📊 7. 监控记录
-        # =========================
         self.monitor.log_success(self.symbol, len(df), duration)
-
         return df
 
     def _clean_daily_basic(self, df: pd.DataFrame) -> pd.DataFrame:
