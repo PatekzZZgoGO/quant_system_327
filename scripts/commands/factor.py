@@ -1,18 +1,17 @@
 import pandas as pd
 import logging
-from typing import Dict, List, Tuple
-from pathlib import Path
 import importlib
 import time
+from pathlib import Path
+
+# ✅ 新架构入口
+from data.services.data_service import DataService
 
 # ✅ engine
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
 
-from data.loaders.market_loader import MarketDataLoader
-from data.loaders.universe_loader import UniverseLoader
-
-# 👉 只保留 rank_corr（用于调试）
+# 👉 调试
 from features.analysis.ic_temp import compute_rank_corr
 
 logger = logging.getLogger(__name__)
@@ -32,20 +31,21 @@ def load_model(name: str):
 
 
 # =========================
-# 🚀 Panel Cache（新增核心）
+# 🚀 Panel Cache（保留你的优化）
 # =========================
 def load_panel_with_cache(
-    data_loader,
+    data_service,
     stock_list,
     date,
     lookback_days=252 * 2
 ):
     """
-    🚀 工业级 panel 加载：
+    工业级 panel 加载（带缓存）
 
     优化点：
-    - 限制历史窗口（避免 24 年数据）
-    - 本地缓存 parquet
+    - 限制历史窗口
+    - parquet 本地缓存
+    - 统一走 DataService
     """
 
     cache_dir = Path("cache/panel")
@@ -61,25 +61,26 @@ def load_panel_with_cache(
     # =========================
     if cache_file.exists():
         logger.info(f"[Factor] Loading panel from cache: {cache_file}")
-        panel = pd.read_parquet(cache_file)
-        return panel
+        return pd.read_parquet(cache_file)
 
     # =========================
-    # ❌ cache miss → 加载
+    # ❌ cache miss → DataService
     # =========================
-    logger.info("[Factor] Cache miss → loading panel from disk")
+    logger.info("[Factor] Cache miss → loading panel via DataService")
 
-    panel = data_loader.load_panel(
-        start_date=start_date,
-        end_date=end_date,
-        symbols=stock_list
+    market = data_service.get_panel(
+        stock_list,
+        start_date,
+        end_date
     )
+
+    panel = market.panel
 
     if panel is None or panel.empty:
         return panel
 
     # =========================
-    # ✅ 写 cache
+    # 写 cache
     # =========================
     panel.to_parquet(cache_file)
 
@@ -89,29 +90,44 @@ def load_panel_with_cache(
 
 
 # =========================
-# 🚀 主执行函数（选股）
+# 🚀 主执行函数
 # =========================
 def run_factor(args):
+
     logger.info("=" * 50)
     logger.info("[Factor] Start running factor pipeline")
 
     total_start_time = time.time()
 
     # =========================
-    # 1️⃣ 初始化
+    # 🧠 初始化（新架构）
     # =========================
-    data_loader = MarketDataLoader()
-    factor_engine = FactorEngine(data_loader)
+    data_service = DataService("data/datasets/processed/stocks")
+
+    factor_engine = FactorEngine(None)  # ⚠️ 已不依赖 data_loader
     scoring_engine = ScoringEngine()
 
     # =========================
-    # 2️⃣ 加载模型
+    # 📦 Universe（Domain）
+    # =========================
+    universe = data_service.get_universe(limit=args.limit)
+
+    stock_list = universe.symbols
+
+    if not stock_list:
+        logger.error("[Factor] stock list is empty")
+        return
+
+    logger.info(f"[Factor] Universe size = {universe.size()}")
+
+    # =========================
+    # 🧠 加载模型
     # =========================
     logger.info(f"[Factor] Loading model: {args.model}")
     model = load_model(args.model)
 
     # =========================
-    # 权重
+    # 权重解析
     # =========================
     if args.weights:
         logger.info(f"[Factor] Using user-specified weights: {args.weights}")
@@ -123,44 +139,24 @@ def run_factor(args):
         )
     else:
         if hasattr(model, "get_weights"):
-            logger.info("[Factor] Fetching weights from model")
             weights = model.get_weights(args.date)
         elif hasattr(model, "WEIGHTS"):
-            logger.info("[Factor] Fetching weights from model (WEIGHTS)")
             weights = model.WEIGHTS
         else:
-            logger.error("[ERROR] model has no weights")
             raise ValueError("[ERROR] model has no weights")
 
-    logger.info(f"[Factor] model = {args.model}")
     logger.info(f"[Factor] weights = {weights}")
 
     # =========================
-    # 3️⃣ 日期
+    # 日期
     # =========================
     date = pd.to_datetime(args.date)
-    logger.info(f"[Factor] Date = {date}")
 
     # =========================
-    # 4️⃣ 股票池
+    # 🚀 Panel（通过 DataService）
     # =========================
-    logger.info("[Factor] Fetching stock list")
-    universe_loader = UniverseLoader()
-    stock_list = universe_loader.get_universe(limit=args.limit)
-
-    if not stock_list:
-        logger.error("[Factor] stock list is empty")
-        return
-
-    logger.info(f"[Factor] universe size = {len(stock_list)}")
-
-    # =========================
-    # 5️⃣ 🚀 数据加载（核心优化）
-    # =========================
-    logger.info(f"[Factor] Loading panel data (optimized)")
-
     panel = load_panel_with_cache(
-        data_loader=data_loader,
+        data_service=data_service,
         stock_list=stock_list,
         date=date
     )
@@ -175,9 +171,9 @@ def run_factor(args):
     logger.info(f"[Factor] Panel shape = {panel.shape}")
 
     # =========================
-    # 6️⃣ 🚀 一次性计算所有因子（核心优化）
+    # 🚀 一次性计算因子（核心）
     # =========================
-    logger.info("[Factor] Computing ALL factors on full panel (ONCE)")
+    logger.info("[Factor] Computing ALL factors (ONCE)")
 
     panel = factor_engine.pipeline.run(
         panel.set_index("Date"),
@@ -187,20 +183,16 @@ def run_factor(args):
     logger.info(f"[Factor] Factor panel shape = {panel.shape}")
 
     # =========================
-    # 7️⃣ 🚀 全局 missing 处理（和 IC 一致）
+    # 🚀 missing 统一处理
     # =========================
-    logger.info("[Factor] Handling missing data (global)")
-
     panel = factor_engine.handle_missing(
         panel,
         factors=list(weights.keys())
     )
 
     # =========================
-    # 8️⃣ 🚀 snapshot（只在最后切片）
+    # 🚀 snapshot（最后才 slice）
     # =========================
-    logger.info(f"[Factor] Extracting snapshot @ {date}")
-
     snapshot = panel[panel["Date"] == date]
 
     if snapshot.empty:
@@ -210,23 +202,20 @@ def run_factor(args):
     logger.info(f"[Factor] Snapshot size = {len(snapshot)}")
 
     # =========================
-    # 9️⃣ 打分
+    # 🏆 打分
     # =========================
     scored = scoring_engine.score(snapshot, weights)
     selected = scoring_engine.select(scored, args.top_n)
 
     # =========================
-    # 输出结果
+    # 输出
     # =========================
     print("\n=== Top Stocks ===")
 
-    cols = ["Symbol", "score"]
-    cols = [c for c in cols if c in selected.columns]
-
     print(
-        selected[cols]
-        .head(args.top_n)
+        selected[["Symbol", "score"]]
         .sort_values("score", ascending=False)
+        .head(args.top_n)
         .to_string(index=False)
     )
 
@@ -248,7 +237,7 @@ def run_factor(args):
     )
 
     # =========================
-    # Debug 信息
+    # Debug
     # =========================
     print("\n=== Debug Info ===")
     print(f"Total candidates: {len(scored)}")
@@ -259,15 +248,8 @@ def run_factor(args):
             f"Score range: {scored['score'].min():.4f} ~ {scored['score'].max():.4f}"
         )
 
-    print("\n=== Factor Stats ===")
-    for c in contrib_cols:
-        print(f"{c}:")
-        print(f"  mean     = {selected[c].mean():.4f}")
-        print(f"  abs_mean = {selected[c].abs().mean():.4f}")
-        print(f"  std      = {selected[c].std():.4f}")
-
     # =========================
-    # Rank Corr（调试用）
+    # Rank Corr（调试）
     # =========================
     rank_corr = compute_rank_corr(
         scored,
@@ -286,7 +268,7 @@ def run_factor(args):
 
 
 # =========================
-# 🧩 CLI 注册
+# CLI 注册
 # =========================
 def register(subparsers):
     factor_parser = subparsers.add_parser("factor", help="因子模块")

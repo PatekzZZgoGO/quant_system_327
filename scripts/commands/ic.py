@@ -1,32 +1,28 @@
 import pandas as pd
 import logging
-from pathlib import Path
 import time
 import importlib
 
-from joblib import Parallel, delayed
-import os
+from data.services.data_service import DataService
+from data.domains.returns_domain import Returns
 
 from features.engine.factor_engine import FactorEngine
-from data.loaders.market_loader import MarketDataLoader
-from data.loaders.universe_loader import UniverseLoader
-
-from features.analysis.ic_temp import (
-    summarize_ic,
-    compute_snapshot_ic
-)
+from features.analysis.ic_temp import summarize_ic
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # =========================
-# 🧠 model / factor解析
+# 模型加载
 # =========================
 def load_model(name: str):
     return importlib.import_module(f"models.alpha.{name}")
 
 
+# =========================
+# 因子解析
+# =========================
 def resolve_factors(args, factor_engine):
 
     if args.factors:
@@ -44,141 +40,66 @@ def resolve_factors(args, factor_engine):
 
 
 # =========================
-# 🚀 并行 worker（优化版）
-# =========================
-def _ic_worker(
-    date,
-    panel_grouped,
-    future_grouped,
-    factors,
-    horizon
-):
-    """
-    单日 IC 计算（无 slice / 无 merge 优化版）
-    """
-
-    try:
-        # =========================
-        # 🚀 O(1) 直接取
-        # =========================
-        snapshot = panel_grouped.get(date)
-        future_ret = future_grouped.get(date)
-
-        if snapshot is None or future_ret is None:
-            return []
-
-        if snapshot.empty or future_ret.empty:
-            return []
-
-        # =========================
-        # 🚀 merge（已经是最小开销）
-        # =========================
-        merged = snapshot.merge(
-            future_ret,
-            on=["Date", "Symbol"],
-            how="inner"
-        )
-
-        if len(merged) < 5:
-            return []
-
-        # =========================
-        # 因子列
-        # =========================
-        factor_cols = [
-            f"{f}_z" if f"{f}_z" in merged.columns else f
-            for f in factors
-        ]
-
-        # =========================
-        # IC 计算
-        # =========================
-        ic_dict = compute_snapshot_ic(
-            merged,
-            factor_cols=factor_cols,
-            ret_col=f"ret_{horizon}d",
-            method="spearman"
-        )
-
-        return [
-            {
-                "date": date,
-                "factor": f.replace("_z", ""),
-                "ic": ic
-            }
-            for f, ic in ic_dict.items()
-        ]
-
-    except Exception as e:
-        logger.warning(f"[IC][Worker] {date} failed: {e}")
-        return []
-
-
-# =========================
 # 🚀 IC 主函数
 # =========================
 def run_factor_ic(args):
+
     logger.info("=" * 50)
     logger.info("[Factor IC] Start")
 
     total_start_time = time.time()
 
-    data_loader = MarketDataLoader()
-    factor_engine = FactorEngine(data_loader)
-
-    logger.info("[IC] Initialized data loader and engine")
-
     # =========================
-    # 股票池
+    # 🧠 初始化 DataService
     # =========================
-    universe_loader = UniverseLoader()
-    stock_list = universe_loader.get_universe(limit=args.limit)
-    logger.info(f"[IC] Loaded universe: {len(stock_list)} stocks")
+    data_service = DataService("data/datasets/processed/stocks")
+
+    factor_engine = FactorEngine(None)
+
+    logger.info("[IC] Initialized DataService & FactorEngine")
 
     # =========================
-    # 🚀 加载 panel
+    # 🧾 Universe（Domain）
+    # =========================
+    universe = data_service.get_universe(limit=args.limit)
+
+    logger.info(f"[IC] Universe size: {universe.size()} | head: {universe.head()}")
+
+    stock_list = universe.symbols
+
+    # =========================
+    # 📊 Panel（Domain）
     # =========================
     buffer_days = args.horizon * 3
 
     logger.info(f"[IC] Loading panel with buffer_days={buffer_days}")
 
-    panel = data_loader.load_panel(
+    market = data_service.get_panel(
+        stock_list,
         args.start,
-        pd.to_datetime(args.end) + pd.Timedelta(days=buffer_days),
-        stock_list
+        pd.to_datetime(args.end) + pd.Timedelta(days=buffer_days)
     )
+
+    panel = market.panel
 
     if panel.empty:
         logger.error("[IC] Panel is empty")
         return
 
-    panel["Date"] = pd.to_datetime(panel["Date"])
-    panel = panel.sort_values(["Symbol", "Date"])
-
-    # =========================
-    # 🚀 提取交易日
-    # =========================
-    all_dates = sorted(panel["Date"].unique())
-    all_dates = pd.to_datetime(all_dates)
-
-    start_dt = pd.to_datetime(args.start)
-    end_dt = pd.to_datetime(args.end)
-
-    dates = [d for d in all_dates if start_dt <= d <= end_dt]
-
-    logger.info(f"[IC] Trade dates count (from panel): {len(dates)}")
+    logger.info(f"[IC] Panel shape: {panel.shape}")
 
     # =========================
     # 因子解析
     # =========================
     factors, source = resolve_factors(args, factor_engine)
+
     logger.info(f"[IC] Factors: {factors}")
     logger.info(f"[IC] Source: {source}")
 
     # =========================
-    # 🚀 一次性算全因子
+    # 🚀 全量因子计算（一次性）
     # =========================
-    logger.info("[IC] Computing ALL factors on full panel (ONCE)")
+    logger.info("[IC] Computing ALL factors on full panel")
 
     panel = factor_engine.pipeline.run(
         panel.set_index("Date"),
@@ -188,72 +109,81 @@ def run_factor_ic(args):
     logger.info(f"[IC] Factor panel shape: {panel.shape}")
 
     # =========================
-    # 🚀 ✅ 全局 missing（关键优化）
+    # 缺失处理
     # =========================
-    logger.info("[IC] Handling missing data ONCE (global)")
+    logger.info("[IC] Handling missing data")
 
     panel = factor_engine.handle_missing(panel, factors)
 
     # =========================
-    # 🚀 未来收益
+    # 🚀 Future Return（Domain）
     # =========================
     logger.info(f"[IC] Computing future returns (horizon={args.horizon})")
 
-    future_returns_df = data_loader.get_future_returns(
-        panel=panel,
-        horizon=args.horizon
+    ret = Returns(panel)
+    panel = ret.forward(horizon=args.horizon)
+
+    ret_col = f"ret_{args.horizon}d"
+
+    logger.info("[IC] Future return computed")
+
+    # =========================
+    # 🚀 IC（vectorized）
+    # =========================
+    logger.info("[IC] Computing IC (vectorized)")
+
+    factor_cols = [
+        f"{f}_z" if f"{f}_z" in panel.columns else f
+        for f in factors
+    ]
+
+    use_cols = ["Date", ret_col] + factor_cols
+
+    df_ic = panel[use_cols].dropna()
+
+    if df_ic.empty:
+        logger.error("[IC] No valid data after dropna")
+        return
+
+    logger.info(f"[IC] IC input shape: {df_ic.shape}")
+
+    # =========================
+    # 核心：groupby IC
+    # =========================
+    def compute_ic_block(x):
+
+        if len(x) < 5:
+            return pd.Series([None] * len(factor_cols), index=factor_cols)
+
+        return x[factor_cols].corrwith(x[ret_col], method="spearman")
+
+    ic_matrix = df_ic.groupby("Date").apply(compute_ic_block)
+
+    # =========================
+    # 转长表
+    # =========================
+    ic_df = (
+        ic_matrix
+        .stack()
+        .reset_index()
+        .rename(columns={
+            "level_1": "factor",
+            0: "ic"
+        })
     )
 
-    future_returns_df["Date"] = pd.to_datetime(future_returns_df["Date"])
-
-    logger.info(f"[IC] Future returns shape: {future_returns_df.shape}")
-
-    # =========================
-    # 🚀 🚀 分组缓存（核心优化）
-    # =========================
-    logger.info("[IC] Building grouped cache (panel / future)")
-
-    panel_grouped = dict(tuple(panel.groupby("Date")))
-    future_grouped = dict(tuple(future_returns_df.groupby("Date")))
-
-    # =========================
-    # 🚀 并行 IC
-    # =========================
-    logger.info("[IC] Running parallel IC computation...")
-
-    n_jobs = max(1, os.cpu_count() - 1)
-
-    results = Parallel(
-        n_jobs=n_jobs,
-        backend="loky"
-    )(
-        delayed(_ic_worker)(
-            date,
-            panel_grouped,
-            future_grouped,
-            factors,
-            args.horizon
-        )
-        for date in dates
-    )
-
-    # =========================
-    # flatten
-    # =========================
-    all_ic = [item for sublist in results for item in sublist]
-
-    # =========================
-    # 汇总
-    # =========================
-    ic_df = pd.DataFrame(all_ic)
+    ic_df["factor"] = ic_df["factor"].str.replace("_z", "")
 
     if ic_df.empty:
-        logger.error("[IC] No results")
+        logger.error("[IC] No IC results")
         return
 
     print("\n=== IC Time Series (tail) ===")
     print(ic_df.tail())
 
+    # =========================
+    # 汇总
+    # =========================
     summary = summarize_ic(ic_df)
 
     print("\n=== IC Summary ===")
