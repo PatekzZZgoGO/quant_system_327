@@ -5,10 +5,12 @@ A 股数据获取模块（Tushare Pro 版）
 需要 Tushare Token 和 120 积分
 """
 import os
+import sys
 import time
 import random
 import logging
 import pickle
+import builtins
 from datetime import datetime, timedelta
 from collections import deque
 from typing import List, Dict, Optional, Tuple
@@ -39,6 +41,18 @@ STOCK_LIST_PATH = DATA_PROCESSED_DIR / 'stock_list.csv'
 
 # 初始化日志
 logger = get_logger(__name__)
+
+
+def print(*args, **kwargs):
+    try:
+        return builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe_args = [
+            str(arg).encode(encoding, errors="ignore").decode(encoding, errors="ignore")
+            for arg in args
+        ]
+        return builtins.print(*safe_args, **kwargs)
 
 
 def ensure_directories():
@@ -100,6 +114,22 @@ class ResilientTushareFetcher:
             return False
         return all(col in df.columns for col in required_columns)
 
+    def _normalize_request_params(self, ts_code: str, start_date: str, end_date: str) -> Tuple[str, str, str]:
+        return (
+            str(ts_code).strip(),
+            str(start_date).replace('-', ''),
+            str(end_date).replace('-', ''),
+        )
+
+    def _is_auth_error(self, error_msg: str) -> bool:
+        error_msg_lower = error_msg.lower()
+        return '权限' in error_msg or '积分' in error_msg or 'token' in error_msg_lower
+
+    def _get_retry_delay(self, attempt: int) -> float:
+        backoff = self.base_delay * (2 ** attempt)
+        jitter = random.uniform(0.5, 1.5)
+        return min(30.0, backoff + jitter)
+
     def fetch_daily_with_retry(self, ts_code: str, start_date: str, end_date: str,
                             max_attempts: int = None) -> Optional[pd.DataFrame]:
         """
@@ -127,11 +157,10 @@ class ResilientTushareFetcher:
         # =========================
         # ✅ 强制类型清洗（极其关键）
         # =========================
-        ts_code = str(ts_code).strip()
-        start_date = str(start_date).replace('-', '')
-        end_date = str(end_date).replace('-', '')
+        ts_code, start_date, end_date = self._normalize_request_params(ts_code, start_date, end_date)
 
         for attempt in range(max_attempts):
+            failure_recorded = False
             try:
                 # =========================
                 # 🧠 专业限流器（核心）
@@ -159,6 +188,8 @@ class ResilientTushareFetcher:
                 if df is None or df.empty:
                     # 👉 很多时候不是“没数据”，而是“被限流”
                     self.rate_limiter.record_empty()
+                    failure_recorded = True
+
 
                     raise ValueError("返回空数据（可能触发Tushare限流/风控）")
 
@@ -167,6 +198,8 @@ class ResilientTushareFetcher:
                 # =========================
                 if not self._validate_data(df, required_columns):
                     self.rate_limiter.record_error()
+                    failure_recorded = True
+
                     raise ValueError("返回数据不完整或字段缺失")
 
                 # =========================
@@ -177,7 +210,8 @@ class ResilientTushareFetcher:
                 return df
 
             except Exception as e:
-                self.rate_limiter.record_error()
+                if not failure_recorded:
+                    self.rate_limiter.record_error()
                 error_msg = str(e)
 
                 # =========================
@@ -192,29 +226,30 @@ class ResilientTushareFetcher:
                 # =========================
                 # 🚨 权限类错误（直接停止）
                 # =========================
-                if '权限' in error_msg or '积分' in error_msg or 'token' in error_msg.lower():
-                    logger.error(f"🚫 权限/Token错误，停止重试：{error_msg}")
+                if 'token' in error_msg.lower() or 'permission' in error_msg.lower() or 'point' in error_msg.lower():
+                    logger.error(f"Auth or token error, stop retrying: {error_msg}")
                     return None
 
                 # =========================
                 # 📉 风控记录（错误）
                 # =========================
-                self.rate_limiter.record_error()
+                if not failure_recorded:
+                    self.rate_limiter.record_error()
 
                 # =========================
                 # 🔁 指数退避重试
                 # =========================
                 if attempt < max_attempts - 1:
-                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0.5, 1.5)
+                    wait_time = self._get_retry_delay(attempt)
 
                     logger.warning(
-                        f"⚠️ 第{attempt+1}次失败，{wait_time:.1f}s后重试 | "
-                        f"错误: {error_msg[:80]}"
+                        f"Attempt {attempt + 1} failed, retry in {wait_time:.1f}s | "
+                        f"error: {error_msg[:80]}"
                     )
 
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"❌ 所有{max_attempts}次尝试失败：{error_msg}")
+                    logger.error(f"All {max_attempts} attempts failed: {error_msg}")
                     return None
 
         return None
@@ -229,13 +264,12 @@ class ResilientTushareFetcher:
 
         max_attempts = max_attempts or self.max_attempts
 
-        ts_code = str(ts_code).strip()
-        start_date = str(start_date).replace('-', '')
-        end_date = str(end_date).replace('-', '')
+        ts_code, start_date, end_date = self._normalize_request_params(ts_code, start_date, end_date)
 
         required_columns = ['ts_code', 'trade_date', 'total_mv']
 
         for attempt in range(max_attempts):
+            failure_recorded = False
             try:
                 self.rate_limiter.wait()
 
@@ -259,10 +293,11 @@ class ResilientTushareFetcher:
                 return df
 
             except Exception as e:
-                self.rate_limiter.record_error()
+                if not failure_recorded:
+                    self.rate_limiter.record_error()
 
                 if attempt < max_attempts - 1:
-                    wait_time = (self.base_delay ** (attempt + 1)) + random.uniform(0.5, 1.5)
+                    wait_time = self._get_retry_delay(attempt)
                     logger.warning(f"[daily_basic] 第{attempt+1}次失败，{wait_time:.1f}s后重试: {e}")
                     time.sleep(wait_time)
                 else:
@@ -331,7 +366,7 @@ class ResilientTushareFetcher:
                 # 🚀 智能退避（核心）
                 # =========================
                 if attempt < max_attempts - 1:
-                    wait_time = min(60, (2 ** attempt) + random.uniform(1, 3))
+                    wait_time = self._get_retry_delay(attempt)
 
                     logger.warning(
                         f"⚠️ 第{attempt+1}次失败 | {wait_time:.1f}s后重试 | 原因: {error_msg[:80]}"
@@ -581,6 +616,8 @@ class TushareDataFetcher:
                 # 确保索引是 datetime 类型（如果读取后不是，手动转换）
                 if not isinstance(df.index, pd.DatetimeIndex):
                     df.index = pd.to_datetime(df.index)
+                if not df.empty:
+                    return df
                 # 如果数据为空，直接返回空
                 if df.empty:
                     print("   缓存为空")
