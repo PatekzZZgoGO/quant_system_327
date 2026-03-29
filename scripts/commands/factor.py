@@ -4,14 +4,14 @@ import importlib
 import time
 from pathlib import Path
 
-# ✅ 新架构入口
+# ✅ 新架构入口（唯一数据入口）
 from data.services.data_service import DataService
 
-# ✅ engine
+# ✅ engine（纯计算）
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
 
-# 👉 调试
+# 👉 调试用
 from features.analysis.ic_temp import compute_rank_corr
 
 logger = logging.getLogger(__name__)
@@ -19,9 +19,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 # =========================
-# 🧠 model
+# 🧠 模型加载
 # =========================
 def load_model(name: str):
+    """
+    动态加载模型（支持 models/alpha 目录）
+
+    参数:
+        name: 模型名称（文件名）
+
+    返回:
+        模块对象
+    """
     try:
         logger.info(f"[load_model] Loading model: {name}")
         return importlib.import_module(f"models.alpha.{name}")
@@ -31,7 +40,7 @@ def load_model(name: str):
 
 
 # =========================
-# 🚀 Panel Cache（保留你的优化）
+# 🚀 Panel Cache（工业级）
 # =========================
 def load_panel_with_cache(
     data_service,
@@ -40,24 +49,36 @@ def load_panel_with_cache(
     lookback_days=252 * 2
 ):
     """
-    工业级 panel 加载（带缓存）
+    🚀 工业级 Panel 加载（带缓存）
 
-    优化点：
-    - 限制历史窗口
-    - parquet 本地缓存
-    - 统一走 DataService
+    设计思想：
+    - DataService 负责“标准化数据”
+    - cache 负责“避免重复 IO”
+    - factor 只负责计算
+
+    参数:
+        data_service: DataService 实例
+        stock_list: 股票列表
+        date: 目标日期
+        lookback_days: 回看窗口（默认2年）
+
+    返回:
+        panel DataFrame（已 clean）
     """
 
     cache_dir = Path("cache/panel")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # =========================
+    # 📅 时间窗口
+    # =========================
     start_date = pd.to_datetime(date) - pd.Timedelta(days=lookback_days)
     end_date = pd.to_datetime(date)
 
     cache_file = cache_dir / f"panel_{start_date.date()}_{end_date.date()}_{len(stock_list)}.parquet"
 
     # =========================
-    # ✅ cache 命中
+    # ✅ 命中缓存
     # =========================
     if cache_file.exists():
         logger.info(f"[Factor] Loading panel from cache: {cache_file}")
@@ -70,27 +91,27 @@ def load_panel_with_cache(
 
     market = data_service.get_panel(
         stock_list,
-        start_date,
-        end_date
+        start_date.strftime("%Y-%m-%d"),
+        end_date.strftime("%Y-%m-%d")
     )
 
     panel = market.panel
 
     if panel is None or panel.empty:
+        logger.warning("[Factor] panel is empty")
         return panel
 
     # =========================
-    # 写 cache
+    # 💾 写入缓存
     # =========================
     panel.to_parquet(cache_file)
-
     logger.info(f"[Factor] Panel cached → {cache_file}")
 
     return panel
 
 
 # =========================
-# 🚀 主执行函数
+# 🚀 主执行函数（核心）
 # =========================
 def run_factor(args):
 
@@ -104,7 +125,9 @@ def run_factor(args):
     # =========================
     data_service = DataService("data/datasets/processed/stocks")
 
-    factor_engine = FactorEngine(None)  # ⚠️ 已不依赖 data_loader
+    # ⚠️ FactorEngine 已不再依赖 loader
+    factor_engine = FactorEngine(None)
+
     scoring_engine = ScoringEngine()
 
     # =========================
@@ -127,10 +150,11 @@ def run_factor(args):
     model = load_model(args.model)
 
     # =========================
-    # 权重解析
+    # ⚖️ 权重解析
     # =========================
     if args.weights:
-        logger.info(f"[Factor] Using user-specified weights: {args.weights}")
+        logger.info(f"[Factor] Using user weights: {args.weights}")
+
         weights = dict(
             (k.strip(), float(v))
             for k, v in (
@@ -148,12 +172,12 @@ def run_factor(args):
     logger.info(f"[Factor] weights = {weights}")
 
     # =========================
-    # 日期
+    # 📅 日期
     # =========================
     date = pd.to_datetime(args.date)
 
     # =========================
-    # 🚀 Panel（通过 DataService）
+    # 🚀 获取 Panel（核心）
     # =========================
     panel = load_panel_with_cache(
         data_service=data_service,
@@ -165,13 +189,10 @@ def run_factor(args):
         logger.warning("[Factor] empty panel")
         return
 
-    panel["Date"] = pd.to_datetime(panel["Date"])
-    panel = panel.sort_values(["Symbol", "Date"])
-
     logger.info(f"[Factor] Panel shape = {panel.shape}")
 
     # =========================
-    # 🚀 一次性计算因子（核心）
+    # 🚀 一次性计算因子（核心优化）
     # =========================
     logger.info("[Factor] Computing ALL factors (ONCE)")
 
@@ -183,7 +204,7 @@ def run_factor(args):
     logger.info(f"[Factor] Factor panel shape = {panel.shape}")
 
     # =========================
-    # 🚀 missing 统一处理
+    # 🚀 全局 missing（统一处理）
     # =========================
     panel = factor_engine.handle_missing(
         panel,
@@ -191,7 +212,7 @@ def run_factor(args):
     )
 
     # =========================
-    # 🚀 snapshot（最后才 slice）
+    # 🚀 snapshot（只在最后切片）
     # =========================
     snapshot = panel[panel["Date"] == date]
 
@@ -208,7 +229,7 @@ def run_factor(args):
     selected = scoring_engine.select(scored, args.top_n)
 
     # =========================
-    # 输出
+    # 📊 输出结果
     # =========================
     print("\n=== Top Stocks ===")
 
@@ -220,7 +241,7 @@ def run_factor(args):
     )
 
     # =========================
-    # 因子贡献
+    # 📊 因子贡献
     # =========================
     contrib_cols = [
         f"{f}_contrib"
@@ -229,6 +250,7 @@ def run_factor(args):
     ]
 
     print("\n=== Factor Contribution ===")
+
     print(
         selected[["Symbol", "score"] + contrib_cols]
         .sort_values("score", ascending=False)
@@ -237,7 +259,7 @@ def run_factor(args):
     )
 
     # =========================
-    # Debug
+    # 🔍 Debug 信息
     # =========================
     print("\n=== Debug Info ===")
     print(f"Total candidates: {len(scored)}")
@@ -249,7 +271,7 @@ def run_factor(args):
         )
 
     # =========================
-    # Rank Corr（调试）
+    # 📈 Rank Corr（调试）
     # =========================
     rank_corr = compute_rank_corr(
         scored,
@@ -268,7 +290,7 @@ def run_factor(args):
 
 
 # =========================
-# CLI 注册
+# 🧩 CLI 注册
 # =========================
 def register(subparsers):
     factor_parser = subparsers.add_parser("factor", help="因子模块")

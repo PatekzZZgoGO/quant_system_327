@@ -140,158 +140,66 @@
         * **Factor Contribution**：各因子贡献（zscore × weight）
         * **Debug Info**：样本数量 / score 范围
         * **Factor Stats**：因子影响力统计
+# IC
+
+        python run.py ic --start 2024-01-01 --end 2024-01-05 --limit 20
 
 
-⚠️ 你现在还有一个隐藏问题（很关键）
-👉 你当前 pipeline 是：
-zscore → score
-
-但 IC 应该用：
-
-❗ 原始因子值（或去极值后的）
-而不是 score
-
-👉 所以建议：
-
-IC 用：factor_raw 或 factor_z
-不要用：final_score
-
-3️⃣ 行业中性化
-
-👉 去掉行业 bias
 
 
-🚀 强烈建议你再做一个升级
-👉 统一时间窗口（核心）
+        
 
-你现在最大的问题是：
+如果你下一步继续，我建议直接干这个：
 
-price ≠ basic 时间长度不一致
-正确做法：
+🚀 IC Engine 升级（彻底去 merge + 全向量化 + 单次 groupby）
 
-在 data update stocks 里：
+这个会再给你一个 2~5x 提升
 
-start_date = "20100101"   # 固定全历史
-end_date = today
+🔥 接下来最值得做的 3 件事
 
-👉 永远拉：
+我按“收益最大”排序：
 
-全量历史
-🧠 你现在系统的状态
+🥇 1. 加 Panel Cache（最赚钱优化）
 
-你已经从：
+你现在每次：
 
-❌ demo脚本
+load_panel → parquet IO
 
-进化到：
+👉 很慢
 
-⚠️ 数据系统（但有一致性风险）
-🔥 下一步（必须做）
+直接加：
 
-我给你一个优先级👇
+内存缓存 + parquet cache
+🥈 2. 因子缓存（Factor Cache）
+panel → factor（很慢）
 
-🥇 P0（必须马上修）
- 防止 cache 被短数据覆盖
- price / basic 对齐（时间）
-🥈 P1（你刚刚做到一半）
- factor 不再调用 API
- 只读 parquet
-🥉 P2（高级玩家）
- 数据 schema 统一（字段标准）
- parquet 分区（加速）
+👉 可以缓存：
 
+factor_panel.parquet
+🥉 3. IC 结果持久化
 
- 🚀 如果你愿意再进阶一点
+现在只是 print：
 
-我可以帮你升级成：
+=== IC Summary ===
 
-✅ 支持多周期因子（momentum_5d / 20d 自动组合）
-✅ 自动标准化 + 打分 pipeline
-✅ 因子配置 YAML 化（量化私募级别）
+👉 应该：
 
-🎯 五、下一步（强烈建议）
-
-你现在最该做的不是加功能，而是：
-
-👉 用 IC 做这件事：
-筛掉垃圾因子
-
-如果你继续，我可以帮你一步到位：
-
-🔥 自动生成最优模型
-w_i ∝ IC_IR
-
-甚至：
-
-👉 自动写出 models/alpha/xxx.py
-
-你现在已经进入：
-
-❗ 量化里最核心的阶段：alpha 验证 + alpha 选择
-
-🧠 四、下一步（我给你排优先级）
-🥇 1️⃣ IC 分 horizon（马上做）
-
-现在你混在一起了：
-
-momentum_20d_ret_1d
-momentum_20d_ret_5d
-momentum_20d_ret_10d
-
-👉 你需要拆：
-
---horizon 5
-
-然后：
-
-👉 只看 ret_5d
-
-🥈 2️⃣ IC decay（进阶）
-
-看：
-
-IC(1d) vs IC(5d) vs IC(10d)
-
-👉 判断因子：
-
-短期 alpha？
-中期 alpha？
-噪音？
-🥉 3️⃣ 自动权重（🔥关键升级）
-
-你现在是：
-
-手写 weights
-
-下一步：
-
-👉 用 IC 自动生成权重
-
-w_i = IC_i / sum(|IC|)
-
-或：
-
-w_i = IR_i
-🧨 4️⃣ 因子筛选（最重要）
-
-加一个过滤：
-
-if abs(IC_mean) < 0.02:
-    drop factor
-
-👉 直接进入：
-
-Alpha 工厂模式
-
-⚠️ 五、一个隐藏但关键的问题
+data/snapshots/ic/
+    ic_20240101_20240105.parquet
+⚠️ 一个非常关键的提醒（你已经快踩到了）
 
 你现在：
 
-valid stocks = 3（有些日期）
+panel = factor_engine.pipeline.run(...)
+panel = factor_engine.handle_missing(...)
 
-👉 这是危险信号
+👉 这里有一个隐患：
 
-❗原因
-数据缺失
-因子 NaN
-universe 太小
+❗ 因子被 overwrite（尤其 _z）
+
+建议你统一：
+
+raw factor: momentum
+normalized: momentum_z
+
+不要混用

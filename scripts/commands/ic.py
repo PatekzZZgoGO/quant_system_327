@@ -3,10 +3,15 @@ import logging
 import time
 import importlib
 
+# ✅ Data Layer
 from data.services.data_service import DataService
 from data.domains.returns_domain import Returns
+from data.domains.ic_domain import IC
 
+# ✅ Factor
 from features.engine.factor_engine import FactorEngine
+
+# ✅ 分析
 from features.analysis.ic_temp import summarize_ic
 
 logger = logging.getLogger(__name__)
@@ -14,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 # =========================
-# 模型加载
+# 🧠 model
 # =========================
 def load_model(name: str):
     return importlib.import_module(f"models.alpha.{name}")
@@ -40,7 +45,7 @@ def resolve_factors(args, factor_engine):
 
 
 # =========================
-# 🚀 IC 主函数
+# 🚀 主函数
 # =========================
 def run_factor_ic(args):
 
@@ -50,29 +55,25 @@ def run_factor_ic(args):
     total_start_time = time.time()
 
     # =========================
-    # 🧠 初始化 DataService
+    # 初始化
     # =========================
     data_service = DataService("data/datasets/processed/stocks")
-
     factor_engine = FactorEngine(None)
 
     logger.info("[IC] Initialized DataService & FactorEngine")
 
     # =========================
-    # 🧾 Universe（Domain）
+    # Universe
     # =========================
     universe = data_service.get_universe(limit=args.limit)
-
-    logger.info(f"[IC] Universe size: {universe.size()} | head: {universe.head()}")
-
     stock_list = universe.symbols
 
+    logger.info(f"[IC] Universe size: {universe.size()}")
+
     # =========================
-    # 📊 Panel（Domain）
+    # Panel
     # =========================
     buffer_days = args.horizon * 3
-
-    logger.info(f"[IC] Loading panel with buffer_days={buffer_days}")
 
     market = data_service.get_panel(
         stock_list,
@@ -93,14 +94,11 @@ def run_factor_ic(args):
     # =========================
     factors, source = resolve_factors(args, factor_engine)
 
-    logger.info(f"[IC] Factors: {factors}")
-    logger.info(f"[IC] Source: {source}")
+    logger.info(f"[IC] Factors: {factors} | Source: {source}")
 
     # =========================
-    # 🚀 全量因子计算（一次性）
+    # 🚀 因子计算（一次性）
     # =========================
-    logger.info("[IC] Computing ALL factors on full panel")
-
     panel = factor_engine.pipeline.run(
         panel.set_index("Date"),
         factors=factors
@@ -111,79 +109,42 @@ def run_factor_ic(args):
     # =========================
     # 缺失处理
     # =========================
-    logger.info("[IC] Handling missing data")
-
     panel = factor_engine.handle_missing(panel, factors)
 
     # =========================
-    # 🚀 Future Return（Domain）
+    # 🚀 Future Return
     # =========================
-    logger.info(f"[IC] Computing future returns (horizon={args.horizon})")
-
     ret = Returns(panel)
     panel = ret.forward(horizon=args.horizon)
 
     ret_col = f"ret_{args.horizon}d"
 
     logger.info("[IC] Future return computed")
+    
+    print("\n=== DEBUG: AFTER RETURNS ===")
+    print(panel.columns.tolist())
 
     # =========================
-    # 🚀 IC（vectorized）
+    # 🚀 IC Domain
     # =========================
-    logger.info("[IC] Computing IC (vectorized)")
+    ic_engine = IC(panel)
 
-    factor_cols = [
-        f"{f}_z" if f"{f}_z" in panel.columns else f
-        for f in factors
-    ]
-
-    use_cols = ["Date", ret_col] + factor_cols
-
-    df_ic = panel[use_cols].dropna()
-
-    if df_ic.empty:
-        logger.error("[IC] No valid data after dropna")
-        return
-
-    logger.info(f"[IC] IC input shape: {df_ic.shape}")
-
-    # =========================
-    # 核心：groupby IC
-    # =========================
-    def compute_ic_block(x):
-
-        if len(x) < 5:
-            return pd.Series([None] * len(factor_cols), index=factor_cols)
-
-        return x[factor_cols].corrwith(x[ret_col], method="spearman")
-
-    ic_matrix = df_ic.groupby("Date").apply(compute_ic_block)
-
-    # =========================
-    # 转长表
-    # =========================
-    ic_df = (
-        ic_matrix
-        .stack()
-        .reset_index()
-        .rename(columns={
-            "level_1": "factor",
-            0: "ic"
-        })
+    ic_df = ic_engine.compute(
+        factors=factors,
+        ret_col=ret_col,
+        method="spearman"
     )
-
-    ic_df["factor"] = ic_df["factor"].str.replace("_z", "")
 
     if ic_df.empty:
         logger.error("[IC] No IC results")
         return
 
+    # =========================
+    # 输出
+    # =========================
     print("\n=== IC Time Series (tail) ===")
     print(ic_df.tail())
 
-    # =========================
-    # 汇总
-    # =========================
     summary = summarize_ic(ic_df)
 
     print("\n=== IC Summary ===")
