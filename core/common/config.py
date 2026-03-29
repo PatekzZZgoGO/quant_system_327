@@ -21,6 +21,9 @@ class Config:
                 self.cache_factor_dir,
                 self.cache_ic_dir,
                 self.cache_universe_dir,
+                self.backtest_dir,
+                self.backtest_results_dir,
+                self.backtest_runs_dir,
             ]
         )
 
@@ -63,6 +66,18 @@ class Config:
     @property
     def cache_universe_dir(self) -> Path:
         return self.cache_dir / "universe"
+
+    @property
+    def backtest_dir(self) -> Path:
+        return self.root_dir / "backtest"
+
+    @property
+    def backtest_results_dir(self) -> Path:
+        return self.backtest_dir / "results"
+
+    @property
+    def backtest_runs_dir(self) -> Path:
+        return self.backtest_results_dir / "runs"
 
     def ensure_dirs(self, dirs: Iterable[Path]) -> None:
         for directory in dirs:

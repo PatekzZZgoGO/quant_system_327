@@ -76,6 +76,21 @@ class DataService:
             cache_extras={"lookback_days": self.lookback_days},
         )
 
+    def get_analysis_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
+        """获取回测分析所需 panel。
+
+        回测需要在结束日期后额外保留一小段缓冲区间，
+        用来承接“信号日 -> 执行日 -> 下一段收益区间”这条链路。
+        """
+        end_with_buffer = pd.to_datetime(end) + pd.Timedelta(days=max(execution_delay, 1) * 3)
+        return self.get_analysis_panel(
+            symbols=symbols,
+            start=start,
+            end=end_with_buffer,
+            use_cache=use_cache,
+            cache_extras={"execution_delay": execution_delay, "analysis": "backtest"},
+        )
+
     def load_factor_analysis(self, date, model, weights, top_n, limit):
         """读取 factor 分析结果缓存。"""
         return self.analysis_provider.load_factor_analysis(
@@ -151,6 +166,16 @@ class DataService:
     def get_factor_panel(self, symbols, date, use_cache=True):
         """兼容旧接口，内部统一转到新的 analysis 入口。"""
         return self.get_analysis_factor_panel(symbols, date, use_cache=use_cache)
+
+    def get_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
+        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        return self.get_analysis_backtest_panel(
+            symbols,
+            start,
+            end,
+            execution_delay=execution_delay,
+            use_cache=use_cache,
+        )
 
     def load_factor_result(self, date, model, weights, top_n, limit):
         """兼容旧接口，内部统一转到新的 analysis 入口。"""

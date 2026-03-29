@@ -144,10 +144,12 @@
 
         python run.py ic --start 2024-01-01 --end 2024-01-05 --limit 20
 
+# backtest
+        python run.py backtest run --start 2024-01-01 --end 2024-01-10 --model simple_alpha --limit 20 --top-n 5
 
 
 
-        
+
 
 如果你下一步继续，我建议直接干这个：
 

@@ -43,9 +43,17 @@ COMMAND_TREE = {
     },
     "ic": {
         "help": "IC 分析模块"
+    },
+
+    "backtest": {
+        "help": "回测模块",
+        "subcommands": {
+            "run": {
+                "help": "运行因子回测"
+            }
+        }
     }
 }
-
 
 # =========================
 # 🚀 自动注册 commands（插件系统）
