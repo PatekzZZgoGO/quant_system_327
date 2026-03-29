@@ -1,36 +1,19 @@
-import pandas as pd
-import logging
 import importlib
+import logging
 import time
-from pathlib import Path
 
-# ✅ 新架构入口（唯一数据入口）
+import pandas as pd
+
 from data.services.data_service import DataService
-
-# ✅ engine（纯计算）
+from features.analysis.ic_temp import compute_rank_corr
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
 
-# 👉 调试用
-from features.analysis.ic_temp import compute_rank_corr
-
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# =========================
-# 🧠 模型加载
-# =========================
 def load_model(name: str):
-    """
-    动态加载模型（支持 models/alpha 目录）
-
-    参数:
-        name: 模型名称（文件名）
-
-    返回:
-        模块对象
-    """
     try:
         logger.info(f"[load_model] Loading model: {name}")
         return importlib.import_module(f"models.alpha.{name}")
@@ -39,277 +22,117 @@ def load_model(name: str):
         raise ValueError(f"[ERROR] model not found: {name}")
 
 
-# =========================
-# 🚀 Panel Cache（工业级）
-# =========================
-def load_panel_with_cache(
-    data_service,
-    stock_list,
-    date,
-    lookback_days=252 * 2
-):
-    """
-    🚀 工业级 Panel 加载（带缓存）
+def resolve_weights(args, model):
+    if args.weights:
+        logger.info(f"[Factor] Using user weights: {args.weights}")
+        return dict((k.strip(), float(v)) for k, v in (item.split("=") for item in args.weights.split(",")))
 
-    设计思想：
-    - DataService 负责“标准化数据”
-    - cache 负责“避免重复 IO”
-    - factor 只负责计算
-
-    参数:
-        data_service: DataService 实例
-        stock_list: 股票列表
-        date: 目标日期
-        lookback_days: 回看窗口（默认2年）
-
-    返回:
-        panel DataFrame（已 clean）
-    """
-
-    cache_dir = Path("cache/panel")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    # =========================
-    # 📅 时间窗口
-    # =========================
-    start_date = pd.to_datetime(date) - pd.Timedelta(days=lookback_days)
-    end_date = pd.to_datetime(date)
-
-    cache_file = cache_dir / f"panel_{start_date.date()}_{end_date.date()}_{len(stock_list)}.parquet"
-
-    # =========================
-    # ✅ 命中缓存
-    # =========================
-    if cache_file.exists():
-        logger.info(f"[Factor] Loading panel from cache: {cache_file}")
-        return pd.read_parquet(cache_file)
-
-    # =========================
-    # ❌ cache miss → DataService
-    # =========================
-    logger.info("[Factor] Cache miss → loading panel via DataService")
-
-    market = data_service.get_panel(
-        stock_list,
-        start_date.strftime("%Y-%m-%d"),
-        end_date.strftime("%Y-%m-%d")
-    )
-
-    panel = market.panel
-
-    if panel is None or panel.empty:
-        logger.warning("[Factor] panel is empty")
-        return panel
-
-    # =========================
-    # 💾 写入缓存
-    # =========================
-    panel.to_parquet(cache_file)
-    logger.info(f"[Factor] Panel cached → {cache_file}")
-
-    return panel
+    if hasattr(model, "get_weights"):
+        return model.get_weights(args.date)
+    if hasattr(model, "WEIGHTS"):
+        return model.WEIGHTS
+    raise ValueError("[ERROR] model has no weights")
 
 
-# =========================
-# 🚀 主执行函数（核心）
-# =========================
+def print_factor_result(scored, weights, top_n, rank_corr):
+    selected = scored.sort_values("score", ascending=False).head(top_n)
+
+    print("\n=== Top Stocks ===")
+    print(selected[["Symbol", "score"]].to_string(index=False))
+
+    contrib_cols = [f"{factor}_contrib" for factor in weights.keys() if f"{factor}_contrib" in selected.columns]
+    print("\n=== Factor Contribution ===")
+    print(selected[["Symbol", "score"] + contrib_cols].to_string(index=False))
+
+    print("\n=== Debug Info ===")
+    print(f"Total candidates: {len(scored)}")
+    print(f"Selected: {len(selected)}")
+    if "score" in scored.columns:
+        print(f"Score range: {scored['score'].min():.4f} ~ {scored['score'].max():.4f}")
+
+    print("\n=== Rank Corr ===")
+    for key, value in rank_corr.items():
+        print(f"{key}: {value:.4f}")
+
+
 def run_factor(args):
-
     logger.info("=" * 50)
     logger.info("[Factor] Start running factor pipeline")
-
     total_start_time = time.time()
 
-    # =========================
-    # 🧠 初始化（新架构）
-    # =========================
-    data_service = DataService("data/datasets/processed/stocks")
-
-    # ⚠️ FactorEngine 已不再依赖 loader
+    data_service = DataService()
     factor_engine = FactorEngine(None)
-
     scoring_engine = ScoringEngine()
 
-    # =========================
-    # 📦 Universe（Domain）
-    # =========================
-    universe = data_service.get_universe(limit=args.limit)
-
+    universe = data_service.get_analysis_universe(limit=args.limit)
     stock_list = universe.symbols
-
     if not stock_list:
         logger.error("[Factor] stock list is empty")
         return
 
     logger.info(f"[Factor] Universe size = {universe.size()}")
-
-    # =========================
-    # 🧠 加载模型
-    # =========================
-    logger.info(f"[Factor] Loading model: {args.model}")
     model = load_model(args.model)
-
-    # =========================
-    # ⚖️ 权重解析
-    # =========================
-    if args.weights:
-        logger.info(f"[Factor] Using user weights: {args.weights}")
-
-        weights = dict(
-            (k.strip(), float(v))
-            for k, v in (
-                item.split("=") for item in args.weights.split(",")
-            )
-        )
-    else:
-        if hasattr(model, "get_weights"):
-            weights = model.get_weights(args.date)
-        elif hasattr(model, "WEIGHTS"):
-            weights = model.WEIGHTS
-        else:
-            raise ValueError("[ERROR] model has no weights")
-
+    weights = resolve_weights(args, model)
     logger.info(f"[Factor] weights = {weights}")
 
-    # =========================
-    # 📅 日期
-    # =========================
     date = pd.to_datetime(args.date)
-
-    # =========================
-    # 🚀 获取 Panel（核心）
-    # =========================
-    panel = load_panel_with_cache(
-        data_service=data_service,
-        stock_list=stock_list,
-        date=date
+    cached_result = data_service.load_factor_analysis(
+        date=date,
+        model=args.model,
+        weights=weights,
+        top_n=args.top_n,
+        limit=args.limit,
     )
+    if cached_result is not None:
+        logger.info("[Factor] Factor cache hit")
+        print_factor_result(cached_result["scored"], weights, args.top_n, cached_result["metadata"]["rank_corr"])
+        return
 
+    panel = data_service.get_analysis_factor_panel(stock_list, date, use_cache=True).panel
     if panel is None or panel.empty:
         logger.warning("[Factor] empty panel")
         return
 
     logger.info(f"[Factor] Panel shape = {panel.shape}")
+    panel = factor_engine.pipeline.run(panel.set_index("Date"), factors=list(weights.keys())).reset_index()
+    panel = factor_engine.handle_missing(panel, factors=list(weights.keys()))
 
-    # =========================
-    # 🚀 一次性计算因子（核心优化）
-    # =========================
-    logger.info("[Factor] Computing ALL factors (ONCE)")
-
-    panel = factor_engine.pipeline.run(
-        panel.set_index("Date"),
-        factors=list(weights.keys())
-    ).reset_index()
-
-    logger.info(f"[Factor] Factor panel shape = {panel.shape}")
-
-    # =========================
-    # 🚀 全局 missing（统一处理）
-    # =========================
-    panel = factor_engine.handle_missing(
-        panel,
-        factors=list(weights.keys())
-    )
-
-    # =========================
-    # 🚀 snapshot（只在最后切片）
-    # =========================
     snapshot = panel[panel["Date"] == date]
-
     if snapshot.empty:
         logger.warning("[Factor] snapshot is empty")
         return
 
-    logger.info(f"[Factor] Snapshot size = {len(snapshot)}")
-
-    # =========================
-    # 🏆 打分
-    # =========================
     scored = scoring_engine.score(snapshot, weights)
-    selected = scoring_engine.select(scored, args.top_n)
-
-    # =========================
-    # 📊 输出结果
-    # =========================
-    print("\n=== Top Stocks ===")
-
-    print(
-        selected[["Symbol", "score"]]
-        .sort_values("score", ascending=False)
-        .head(args.top_n)
-        .to_string(index=False)
+    rank_corr = compute_rank_corr(scored, target_col="score", factors=list(weights.keys()))
+    data_service.save_factor_analysis(
+        date=date,
+        model=args.model,
+        weights=weights,
+        top_n=args.top_n,
+        limit=args.limit,
+        scored=scored,
+        metadata={
+            "rank_corr": rank_corr,
+            "weights": weights,
+            "date": date.strftime("%Y-%m-%d"),
+            "model": args.model,
+        },
     )
+    print_factor_result(scored, weights, args.top_n, rank_corr)
 
-    # =========================
-    # 📊 因子贡献
-    # =========================
-    contrib_cols = [
-        f"{f}_contrib"
-        for f in weights.keys()
-        if f"{f}_contrib" in selected.columns
-    ]
-
-    print("\n=== Factor Contribution ===")
-
-    print(
-        selected[["Symbol", "score"] + contrib_cols]
-        .sort_values("score", ascending=False)
-        .head(args.top_n)
-        .to_string(index=False)
-    )
-
-    # =========================
-    # 🔍 Debug 信息
-    # =========================
-    print("\n=== Debug Info ===")
-    print(f"Total candidates: {len(scored)}")
-    print(f"Selected: {len(selected)}")
-
-    if "score" in scored.columns:
-        print(
-            f"Score range: {scored['score'].min():.4f} ~ {scored['score'].max():.4f}"
-        )
-
-    # =========================
-    # 📈 Rank Corr（调试）
-    # =========================
-    rank_corr = compute_rank_corr(
-        scored,
-        target_col="score",
-        factors=list(weights.keys())
-    )
-
-    print("\n=== Rank Corr ===")
-    for k, v in rank_corr.items():
-        print(f"{k}: {v:.4f}")
-
-    logger.info(
-        f"[Factor] Done | total time: {time.time() - total_start_time:.4f}s"
-    )
+    logger.info(f"[Factor] Done | total time: {time.time() - total_start_time:.4f}s")
     logger.info("=" * 50)
 
 
-# =========================
-# 🧩 CLI 注册
-# =========================
 def register(subparsers):
-    factor_parser = subparsers.add_parser("factor", help="因子模块")
+    factor_parser = subparsers.add_parser("factor", help="factor module")
+    subparsers_factor = factor_parser.add_subparsers(dest="action", required=True)
 
-    subparsers_factor = factor_parser.add_subparsers(
-        dest="action",
-        required=True
-    )
-
-    run_parser = subparsers_factor.add_parser(
-        "run",
-        help="运行因子选股"
-    )
-
+    run_parser = subparsers_factor.add_parser("run", help="run factor selection")
     run_parser.add_argument("--date", type=str, required=True)
     run_parser.add_argument("--top-n", type=int, default=50)
     run_parser.add_argument("--limit", type=int, default=None)
     run_parser.add_argument("--weights", type=str)
     run_parser.add_argument("--model", type=str, required=True)
     run_parser.add_argument("--save", action="store_true")
-
     run_parser.set_defaults(func=run_factor)
