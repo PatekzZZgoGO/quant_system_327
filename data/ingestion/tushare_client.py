@@ -19,6 +19,7 @@ from pathlib import Path
 from data.ingestion.rate_limiter.advanced_rate_limiter import AdvancedRateLimiter
 
 import pandas as pd
+from exceptions.data import DataUnavailableError, SchemaValidationError
 
 # 项目导入
 from infra.config import config
@@ -190,8 +191,7 @@ class ResilientTushareFetcher:
                     self.rate_limiter.record_empty()
                     failure_recorded = True
 
-
-                    raise ValueError("返回空数据（可能触发Tushare限流/风控）")
+                    raise DataUnavailableError("返回空数据（可能触发Tushare限流/风控）")
 
                 # =========================
                 # ✅ 数据结构校验
@@ -200,7 +200,7 @@ class ResilientTushareFetcher:
                     self.rate_limiter.record_error()
                     failure_recorded = True
 
-                    raise ValueError("返回数据不完整或字段缺失")
+                    raise SchemaValidationError("返回数据不完整或字段缺失")
 
                 # =========================
                 # 🎯 成功（重置风控计数）
@@ -283,11 +283,11 @@ class ResilientTushareFetcher:
                 # 🚨 风控检测
                 if df is None or df.empty:
                     self.rate_limiter.record_empty()
-                    raise ValueError("daily_basic 返回空数据（可能限流）")
+                    raise DataUnavailableError("daily_basic 返回空数据（可能限流）")
 
                 if not all(col in df.columns for col in required_columns):
                     self.rate_limiter.record_error()
-                    raise ValueError("daily_basic 字段缺失")
+                    raise SchemaValidationError("daily_basic 字段缺失")
 
                 self.rate_limiter.record_success()
                 return df
@@ -340,13 +340,13 @@ class ResilientTushareFetcher:
                 # 🚨 风控检测（核心升级）
                 # =========================
                 if df is None:
-                    raise ValueError("返回None（疑似风控/限流）")
+                    raise DataUnavailableError("返回None（疑似风控/限流）")
 
                 if len(df) == 0:
-                    raise ValueError("返回空数据（疑似被限流）")
+                    raise DataUnavailableError("返回空数据（疑似被限流）")
 
                 if 'ts_code' not in df.columns:
-                    raise ValueError("字段异常（疑似接口被降级）")
+                    raise SchemaValidationError("字段异常（疑似接口被降级）")
 
                 # ✅ 成功
                 logger.info(f"✅ 获取股票列表成功：{len(df)} 条")

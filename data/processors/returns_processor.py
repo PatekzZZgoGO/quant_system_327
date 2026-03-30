@@ -1,6 +1,8 @@
 import pandas as pd
 import logging
 
+from exceptions.data import SchemaValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +32,7 @@ def compute_future_returns(
 
     required_cols = {"Date", "Symbol", "Close"}
     if not required_cols.issubset(panel.columns):
-        raise ValueError(
+        raise SchemaValidationError(
             f"[Returns] Missing required columns: {required_cols - set(panel.columns)}"
         )
 

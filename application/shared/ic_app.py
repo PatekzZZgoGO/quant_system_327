@@ -7,6 +7,8 @@ import pandas as pd
 from data.domains.ic_domain import IC
 from data.domains.returns_domain import Returns
 from data.services.data_service import DataService
+from exceptions.config import ConfigurationError
+from exceptions.pipeline import PipelineExecutionError
 from features.analysis.ic_temp import summarize_ic
 from features.engine.factor_engine import FactorEngine
 from utils.result_metadata import build_result_metadata
@@ -15,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 def load_model(name: str):
-    return importlib.import_module(f"models.alpha.{name}")
+    try:
+        return importlib.import_module(f"models.alpha.{name}")
+    except ModuleNotFoundError as exc:
+        raise ConfigurationError(f"[ICApp] model not found: {name}") from exc
 
 
 def resolve_factors(model_name: Optional[str], user_factors, factor_engine: FactorEngine):
@@ -91,7 +96,7 @@ def run_ic_analysis(
         use_cache=True,
     ).panel
     if panel is None or panel.empty:
-        raise ValueError("[ICApp] panel is empty")
+        raise PipelineExecutionError("[ICApp] panel is empty")
 
     panel = factor_engine.pipeline.run(panel.set_index("Date"), factors=factors).reset_index()
     panel = factor_engine.handle_missing(panel, factors)
@@ -103,7 +108,7 @@ def run_ic_analysis(
     ic_engine = IC(panel)
     ic_df = ic_engine.compute(factors=factors, ret_col=ret_col, method="spearman")
     if ic_df.empty:
-        raise ValueError("[ICApp] no IC results")
+        raise PipelineExecutionError("[ICApp] no IC results")
 
     summary = summarize_ic(ic_df)
     source_end = pd.to_datetime(end) + pd.Timedelta(days=horizon * 3)

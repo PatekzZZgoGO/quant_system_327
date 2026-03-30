@@ -2,6 +2,8 @@ from data.processors.returns_processor import compute_future_returns
 import pandas as pd
 import logging
 
+from exceptions.data import DataUnavailableError
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +22,7 @@ class Returns:
 
     def __init__(self, panel: pd.DataFrame):
         if panel is None or panel.empty:
-            raise ValueError("[Returns] Input panel is empty")
+            raise DataUnavailableError("[Returns] Input panel is empty")
 
         self.panel = panel.copy()
 

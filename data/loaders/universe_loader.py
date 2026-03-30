@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 import pandas as pd
 from typing import List, Optional
+from exceptions.data import DataUnavailableError, SchemaValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class UniverseLoader:
             symbols = self._cached_symbols
         else:
             if not self.data_dir.exists():
-                raise FileNotFoundError(
+                raise DataUnavailableError(
                     f"❌ 数据目录不存在: {self.data_dir}\n"
                     "请先运行:\n"
                     "python run.py data update stocks"
@@ -66,7 +67,7 @@ class UniverseLoader:
 
             parquet_files = list(self.data_dir.glob("*.parquet"))
             if not parquet_files:
-                raise FileNotFoundError(
+                raise DataUnavailableError(
                     f"❌ 数据目录中无 parquet 文件: {self.data_dir}\n"
                     "请先运行:\n"
                     "python run.py data update stocks"
@@ -75,7 +76,7 @@ class UniverseLoader:
             # 从文件中解析符号并缓存
             symbols = self._get_all_symbols_from_files()
             if not symbols:
-                raise ValueError("❌ 未能从 parquet 文件中解析出股票代码")
+                raise SchemaValidationError("❌ 未能从 parquet 文件中解析出股票代码")
 
             # 缓存符号
             self._cached_symbols = symbols

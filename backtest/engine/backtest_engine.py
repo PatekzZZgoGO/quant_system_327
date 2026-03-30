@@ -8,6 +8,7 @@ from backtest.simulation.pnl_calculator import PnLCalculator
 from backtest.simulation.portfolio_manager import PortfolioManager
 from backtest.simulation.signal_generator import SignalGenerator
 from data.services.data_service import DataService
+from exceptions.pipeline import PipelineExecutionError
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
 
@@ -82,11 +83,11 @@ class BacktestEngine:
         universe = self.data_service.get_analysis_universe(limit=limit, use_cache=use_cache)
         symbols = universe.symbols
         if not symbols:
-            raise ValueError("[BacktestEngine] universe is empty")
+            raise PipelineExecutionError("[BacktestEngine] universe is empty")
 
         panel = self._prepare_panel(symbols, start, end, execution_delay=execution_delay, use_cache=use_cache)
         if panel.empty:
-            raise ValueError("[BacktestEngine] panel is empty")
+            raise PipelineExecutionError("[BacktestEngine] panel is empty")
 
         factor_panel = self._compute_factor_panel(panel, weights)
         all_dates = sorted(factor_panel["Date"].drop_duplicates())

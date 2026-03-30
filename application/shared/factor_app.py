@@ -5,6 +5,8 @@ from typing import Dict, Optional
 import pandas as pd
 
 from data.services.data_service import DataService
+from exceptions.config import ConfigurationError
+from exceptions.pipeline import PipelineExecutionError
 from features.analysis.ic_temp import compute_rank_corr
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
@@ -19,7 +21,7 @@ def load_model(name: str):
         return importlib.import_module(f"models.alpha.{name}")
     except ModuleNotFoundError as exc:
         logger.error("[FactorApp] model not found: %s", name)
-        raise ValueError(f"[FactorApp] model not found: {name}") from exc
+        raise ConfigurationError(f"[FactorApp] model not found: {name}") from exc
 
 
 def resolve_weights(model, date, user_weights: Optional[str] = None) -> Dict[str, float]:
@@ -31,7 +33,7 @@ def resolve_weights(model, date, user_weights: Optional[str] = None) -> Dict[str
         return model.get_weights(date)
     if hasattr(model, "WEIGHTS"):
         return model.WEIGHTS
-    raise ValueError("[FactorApp] model has no weights")
+    raise ConfigurationError("[FactorApp] model has no weights")
 
 
 def _load_factor_panel(data_service: DataService, symbols, date, use_cache: bool = True):
@@ -66,7 +68,7 @@ def run_factor_analysis(
     universe = data_service.get_analysis_universe(limit=limit)
     stock_list = universe.symbols
     if not stock_list:
-        raise ValueError("[FactorApp] stock list is empty")
+        raise PipelineExecutionError("[FactorApp] stock list is empty")
 
     model = load_model(model_name)
     weights = resolve_weights(model, analysis_date, user_weights)
@@ -93,14 +95,14 @@ def run_factor_analysis(
 
     panel = _load_factor_panel(data_service, stock_list, analysis_date, use_cache=True).panel
     if panel is None or panel.empty:
-        raise ValueError("[FactorApp] panel is empty")
+        raise PipelineExecutionError("[FactorApp] panel is empty")
 
     panel = factor_engine.pipeline.run(panel.set_index("Date"), factors=list(weights.keys())).reset_index()
     panel = factor_engine.handle_missing(panel, factors=list(weights.keys()))
 
     snapshot = panel[panel["Date"] == analysis_date]
     if snapshot.empty:
-        raise ValueError("[FactorApp] snapshot is empty")
+        raise PipelineExecutionError("[FactorApp] snapshot is empty")
 
     scored = scoring_engine.score(snapshot, weights)
     rank_corr = compute_rank_corr(scored, target_col="score", factors=list(weights.keys()))

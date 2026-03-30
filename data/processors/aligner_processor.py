@@ -1,5 +1,7 @@
 import pandas as pd
 
+from exceptions.data import SchemaValidationError
+
 
 def align_price_basic(price_df: pd.DataFrame, basic_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -33,10 +35,14 @@ def align_price_basic(price_df: pd.DataFrame, basic_df: pd.DataFrame) -> pd.Data
     required_cols = {"Date", "Symbol"}
 
     if not required_cols.issubset(price_df.columns):
-        raise ValueError(f"price_df 缺少必要列: {required_cols - set(price_df.columns)}")
+        raise SchemaValidationError(
+            f"price_df 缺少必要列: {required_cols - set(price_df.columns)}"
+        )
 
     if not required_cols.issubset(basic_df.columns):
-        raise ValueError(f"basic_df 缺少必要列: {required_cols - set(basic_df.columns)}")
+        raise SchemaValidationError(
+            f"basic_df 缺少必要列: {required_cols - set(basic_df.columns)}"
+        )
 
     # =========================
     # 📅 时间标准化

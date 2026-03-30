@@ -7,6 +7,7 @@ from backtest.engine import BacktestEngine
 from backtest.simulation import ExecutionModel
 from core.common.config import APP_CONFIG
 from data.services.data_service import DataService
+from exceptions.config import ConfigurationError
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
 from utils.result_metadata import build_result_metadata
@@ -14,7 +15,10 @@ from utils.result_metadata import build_result_metadata
 
 def load_model(name: str):
     """Load alpha model module."""
-    return importlib.import_module(f"models.alpha.{name}")
+    try:
+        return importlib.import_module(f"models.alpha.{name}")
+    except ModuleNotFoundError as exc:
+        raise ConfigurationError(f"[BacktestApp] model not found: {name}") from exc
 
 
 def resolve_weights(model, date=None):
@@ -23,7 +27,7 @@ def resolve_weights(model, date=None):
         return model.get_weights(date)
     if hasattr(model, "WEIGHTS"):
         return model.WEIGHTS
-    raise ValueError("[BacktestApp] model has no weights")
+    raise ConfigurationError("[BacktestApp] model has no weights")
 
 
 def save_backtest_result(result, model_name: str, metadata=None):
