@@ -15,14 +15,19 @@ from data.providers.universe_provider import UniverseProvider
 
 
 class DataService:
-    """数据服务统一入口。
+    """Shared data facade。
 
-    这层是命令层、策略层、分析层访问数据的唯一门面：
-    - 向下只依赖 Loader / Provider
-    - 向上暴露面向业务语义的方法
+    `DataService` 是当前数据层对上层暴露的 shared data facade。
+    它的职责边界应主要聚焦在两类能力：
+    - 共享数据访问
+    - 共享分析输入准备
 
-    换句话说，Factor / IC 只应该说“我要分析用股票池 / 分析用 panel / 分析结果缓存”，
-    而不应该知道缓存 key 如何组织、目录放在哪里、底层文件如何拼装。
+    它负责把 Loader / Provider / Cache 组织成稳定的数据访问语义，
+    让命令层、策略层、分析层不必感知底层文件、缓存 key 和拼装细节。
+
+    同时也需要明确边界：
+    product / trading 特定业务编排不应继续在这里膨胀；
+    带有强场景语义的 factor / IC / backtest 规则应尽量停留在更上层。
     """
 
     def __init__(self, data_dir: Optional[str] = None):
@@ -41,8 +46,12 @@ class DataService:
         self.universe_loader = UniverseLoader(self.data_dir)
         self.universe_provider = UniverseProvider(self.universe_loader)
 
+    # ------------------------------------------------------------------
+    # Shared Analysis Input Access
+    # ------------------------------------------------------------------
+
     def get_analysis_panel(self, symbols, start, end, use_cache=True, cache_extras=None):
-        """通用分析 panel 入口。
+        """[Shared Analysis Input Access] 获取通用分析 panel。
 
         这是更底层的分析 panel 方法，适合 Provider/DataService 内部复用。
         常规业务代码优先使用 `get_analysis_factor_panel()` 或
@@ -57,12 +66,12 @@ class DataService:
         )
 
     def get_analysis_universe(self, limit=None, use_cache=True):
-        """获取分析链路使用的股票池。"""
+        """[Shared Analysis Input Access] 获取分析链路使用的股票池。"""
         symbols = self.universe_provider.load_analysis_universe(limit=limit, use_cache=use_cache)
         return Universe(symbols)
 
     def get_analysis_factor_panel(self, symbols, date, use_cache=True):
-        """获取因子分析所需 panel。
+        """[Boundary Warning] 获取因子分析所需 panel。
 
         这里统一封装 lookback 规则，避免命令层重复计算窗口长度。
         """
@@ -77,7 +86,7 @@ class DataService:
         )
 
     def get_analysis_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
-        """获取回测分析所需 panel。
+        """[Boundary Warning] 获取回测分析所需 panel。
 
         回测需要在结束日期后额外保留一小段缓冲区间，
         用来承接“信号日 -> 执行日 -> 下一段收益区间”这条链路。
@@ -92,7 +101,7 @@ class DataService:
         )
 
     def load_factor_analysis(self, date, model, weights, top_n, limit):
-        """读取 factor 分析结果缓存。"""
+        """[Shared Analysis Input Access] 读取 factor 分析结果缓存。"""
         return self.analysis_provider.load_factor_analysis(
             date=pd.to_datetime(date).strftime("%Y-%m-%d"),
             model=model,
@@ -103,7 +112,7 @@ class DataService:
         )
 
     def save_factor_analysis(self, date, model, weights, top_n, limit, scored: pd.DataFrame, metadata):
-        """保存 factor 分析结果缓存。"""
+        """[Shared Analysis Input Access] 保存 factor 分析结果缓存。"""
         self.analysis_provider.save_factor_analysis(
             date=pd.to_datetime(date).strftime("%Y-%m-%d"),
             model=model,
@@ -116,7 +125,7 @@ class DataService:
         )
 
     def get_analysis_ic_panel(self, symbols, start, end, horizon, use_cache=True):
-        """获取 IC 分析所需 panel。
+        """[Boundary Warning] 获取 IC 分析所需 panel。
 
         IC 需要额外的 forward return 计算空间，所以这里统一追加 buffer 天数，
         避免命令层重复处理日期扩展逻辑。
@@ -131,7 +140,7 @@ class DataService:
         )
 
     def load_ic_analysis(self, start, end, horizon, limit, model, factors):
-        """读取 IC 分析结果缓存。"""
+        """[Shared Analysis Input Access] 读取 IC 分析结果缓存。"""
         return self.analysis_provider.load_ic_analysis(
             start=pd.to_datetime(start).strftime("%Y-%m-%d"),
             end=pd.to_datetime(end).strftime("%Y-%m-%d"),
@@ -142,7 +151,7 @@ class DataService:
         )
 
     def save_ic_analysis(self, start, end, horizon, limit, model, factors, ic_df: pd.DataFrame, summary_df: pd.DataFrame, metadata):
-        """保存 IC 分析结果缓存。"""
+        """[Shared Analysis Input Access] 保存 IC 分析结果缓存。"""
         self.analysis_provider.save_ic_analysis(
             start=pd.to_datetime(start).strftime("%Y-%m-%d"),
             end=pd.to_datetime(end).strftime("%Y-%m-%d"),
@@ -155,20 +164,28 @@ class DataService:
             metadata=metadata,
         )
 
+    # ------------------------------------------------------------------
+    # Shared Raw Data Access
+    # ------------------------------------------------------------------
+
     def get_panel(self, symbols, start, end, use_cache=True, cache_extras=None):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Raw Data Access] 兼容旧接口，获取基础 panel 数据入口。"""
         return self.get_analysis_panel(symbols, start, end, use_cache=use_cache, cache_extras=cache_extras)
 
     def get_universe(self, limit=None, use_cache=True):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Raw Data Access] 兼容旧接口，获取基础 universe 数据入口。"""
         return self.get_analysis_universe(limit=limit, use_cache=use_cache)
 
+    # ------------------------------------------------------------------
+    # Legacy / Boundary Warning
+    # ------------------------------------------------------------------
+
     def get_factor_panel(self, symbols, date, use_cache=True):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Boundary Warning] 兼容旧接口，获取 factor 场景 panel。"""
         return self.get_analysis_factor_panel(symbols, date, use_cache=use_cache)
 
     def get_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Boundary Warning] 兼容旧接口，获取 backtest 场景 panel。"""
         return self.get_analysis_backtest_panel(
             symbols,
             start,
@@ -178,21 +195,28 @@ class DataService:
         )
 
     def load_factor_result(self, date, model, weights, top_n, limit):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Analysis Input Access] 兼容旧接口，读取 factor 分析结果。"""
         return self.load_factor_analysis(date, model, weights, top_n, limit)
 
     def save_factor_result(self, date, model, weights, top_n, limit, scored: pd.DataFrame, metadata):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Analysis Input Access] 兼容旧接口，保存 factor 分析结果。"""
         self.save_factor_analysis(date, model, weights, top_n, limit, scored, metadata)
 
     def get_ic_panel(self, symbols, start, end, horizon, use_cache=True):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Boundary Warning] 兼容旧接口，获取 IC 场景 panel。"""
         return self.get_analysis_ic_panel(symbols, start, end, horizon, use_cache=use_cache)
 
     def load_ic_result(self, start, end, horizon, limit, model, factors):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Analysis Input Access] 兼容旧接口，读取 IC 分析结果。"""
         return self.load_ic_analysis(start, end, horizon, limit, model, factors)
 
     def save_ic_result(self, start, end, horizon, limit, model, factors, ic_df: pd.DataFrame, summary_df: pd.DataFrame, metadata):
-        """兼容旧接口，内部统一转到新的 analysis 入口。"""
+        """[Shared Analysis Input Access] 兼容旧接口，保存 IC 分析结果。"""
         self.save_ic_analysis(start, end, horizon, limit, model, factors, ic_df, summary_df, metadata)
+
+    # ------------------------------------------------------------------
+    # Future Out-of-Scope Examples
+    # ------------------------------------------------------------------
+    # get_signal_context(...)           # out of shared foundation scope
+    # get_content_context(...)          # out of shared foundation scope
+    # get_trade_decision_context(...)   # out of shared foundation scope
