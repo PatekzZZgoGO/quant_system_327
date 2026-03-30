@@ -40,7 +40,13 @@ def print_backtest_result(summary: pd.DataFrame, daily_pnl: pd.DataFrame, trades
 
 
 def save_backtest_result(result, model_name: str):
-    """把回测结果保存到 backtest/results/runs。"""
+    """把回测结果保存到 backtest/results/runs。
+
+    兼容性说明：
+    - 当前阶段仍沿用现有 `backtest/results/runs` 路径；
+    - 未来若逐步推进存储分区，目标落位应为 `storage/trading_system/backtests/`；
+    - 本函数当前不改变现有路径逻辑，只补充边界说明。
+    """
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = APP_CONFIG.backtest_runs_dir / f"{run_id}_{model_name}"
     output_dir.mkdir(parents=True, exist_ok=True)
