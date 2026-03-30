@@ -1,4 +1,5 @@
 import importlib
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -8,6 +9,7 @@ from core.common.config import APP_CONFIG
 from data.services.data_service import DataService
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
+from utils.result_metadata import build_result_metadata
 
 
 def load_model(name: str):
@@ -24,7 +26,7 @@ def resolve_weights(model, date=None):
     raise ValueError("[BacktestApp] model has no weights")
 
 
-def save_backtest_result(result, model_name: str):
+def save_backtest_result(result, model_name: str, metadata=None):
     """Persist backtest artifacts to the current compatible output path."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = APP_CONFIG.backtest_runs_dir / f"{run_id}_{model_name}"
@@ -35,6 +37,11 @@ def save_backtest_result(result, model_name: str):
     result["trades"].to_csv(output_dir / "trades.csv", index=False)
     result["signals"].to_csv(output_dir / "signals.csv", index=False)
     result["positions"].to_csv(output_dir / "positions.csv", index=False)
+    if metadata is not None:
+        (output_dir / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=True, indent=2),
+            encoding="utf-8",
+        )
 
     return output_dir
 
@@ -85,9 +92,33 @@ def run_backtest_analysis(
         use_cache=use_cache,
     )
 
-    output_dir = save_backtest_result(result, model_name) if save else None
+    metadata = build_result_metadata(
+        config={
+            "model": model_name,
+            "weights": weights,
+            "top_n": top_n,
+            "limit": limit,
+            "rebalance_every": rebalance_every,
+            "execution_delay": execution_delay,
+            "commission_rate": commission_rate,
+            "slippage_rate": slippage_rate,
+            "use_cache": use_cache,
+        },
+        source_window={
+            "start": str(start),
+            "end": str(end),
+        },
+        universe_version=f"analysis_universe:limit={limit if limit is not None else 'all'}",
+        extra={
+            "model": model_name,
+            "weights": weights,
+        },
+    )
+
+    output_dir = save_backtest_result(result, model_name, metadata=metadata) if save else None
     return {
         "result": result,
+        "metadata": metadata,
         "weights": weights,
         "model": model_name,
         "output_dir": output_dir,

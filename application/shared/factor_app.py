@@ -8,6 +8,7 @@ from data.services.data_service import DataService
 from features.analysis.ic_temp import compute_rank_corr
 from features.engine.factor_engine import FactorEngine
 from features.engine.scoring_engine import ScoringEngine
+from utils.result_metadata import build_result_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ def run_factor_analysis(
         return {
             "scored": cached_result["scored"],
             "rank_corr": cached_result["metadata"]["rank_corr"],
+            "metadata": cached_result["metadata"],
             "weights": weights,
             "date": analysis_date,
             "model": model_name,
@@ -102,12 +104,27 @@ def run_factor_analysis(
 
     scored = scoring_engine.score(snapshot, weights)
     rank_corr = compute_rank_corr(scored, target_col="score", factors=list(weights.keys()))
-    metadata = {
-        "rank_corr": rank_corr,
-        "weights": weights,
-        "date": analysis_date.strftime("%Y-%m-%d"),
-        "model": model_name,
-    }
+    source_start = analysis_date - pd.Timedelta(days=data_service.lookback_days)
+    metadata = build_result_metadata(
+        config={
+            "model": model_name,
+            "weights": weights,
+            "top_n": top_n,
+            "limit": limit,
+            "lookback_days": data_service.lookback_days,
+        },
+        source_window={
+            "start": source_start.strftime("%Y-%m-%d"),
+            "end": analysis_date.strftime("%Y-%m-%d"),
+        },
+        universe_version=f"analysis_universe:limit={limit if limit is not None else 'all'}:count={universe.size()}",
+        extra={
+            "rank_corr": rank_corr,
+            "weights": weights,
+            "date": analysis_date.strftime("%Y-%m-%d"),
+            "model": model_name,
+        },
+    )
     data_service.save_factor_analysis(
         date=analysis_date,
         model=model_name,
@@ -120,6 +137,7 @@ def run_factor_analysis(
     return {
         "scored": scored,
         "rank_corr": rank_corr,
+        "metadata": metadata,
         "weights": weights,
         "date": analysis_date,
         "model": model_name,

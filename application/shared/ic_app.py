@@ -9,6 +9,7 @@ from data.domains.returns_domain import Returns
 from data.services.data_service import DataService
 from features.analysis.ic_temp import summarize_ic
 from features.engine.factor_engine import FactorEngine
+from utils.result_metadata import build_result_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def run_ic_analysis(
         return {
             "ic_df": cached_result["ic_df"],
             "summary": cached_result["summary"],
+            "metadata": cached_result["metadata"],
             "factors": factors,
             "source": source,
             "from_cache": True,
@@ -104,6 +106,27 @@ def run_ic_analysis(
         raise ValueError("[ICApp] no IC results")
 
     summary = summarize_ic(ic_df)
+    source_end = pd.to_datetime(end) + pd.Timedelta(days=horizon * 3)
+    metadata = build_result_metadata(
+        config={
+            "model": model_name,
+            "factors": factors,
+            "limit": limit,
+            "horizon": horizon,
+        },
+        source_window={
+            "start": pd.to_datetime(start).strftime("%Y-%m-%d"),
+            "end": source_end.strftime("%Y-%m-%d"),
+        },
+        universe_version=f"analysis_universe:limit={limit if limit is not None else 'all'}:count={universe.size()}",
+        extra={
+            "factors": factors,
+            "source": source,
+            "start": start,
+            "end": end,
+            "horizon": horizon,
+        },
+    )
     data_service.save_ic_analysis(
         start=start,
         end=end,
@@ -113,17 +136,12 @@ def run_ic_analysis(
         factors=factors,
         ic_df=ic_df,
         summary_df=summary,
-        metadata={
-            "factors": factors,
-            "source": source,
-            "start": start,
-            "end": end,
-            "horizon": horizon,
-        },
+        metadata=metadata,
     )
     return {
         "ic_df": ic_df,
         "summary": summary,
+        "metadata": metadata,
         "factors": factors,
         "source": source,
         "from_cache": False,
