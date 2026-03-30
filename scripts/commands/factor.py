@@ -1,37 +1,9 @@
-import importlib
 import logging
-import time
 
-import pandas as pd
-
-from data.services.data_service import DataService
-from features.analysis.ic_temp import compute_rank_corr
-from features.engine.factor_engine import FactorEngine
-from features.engine.scoring_engine import ScoringEngine
+from application.shared.factor_app import run_factor_analysis
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-def load_model(name: str):
-    try:
-        logger.info(f"[load_model] Loading model: {name}")
-        return importlib.import_module(f"models.alpha.{name}")
-    except ModuleNotFoundError:
-        logger.error(f"[ERROR] model not found: {name}")
-        raise ValueError(f"[ERROR] model not found: {name}")
-
-
-def resolve_weights(args, model):
-    if args.weights:
-        logger.info(f"[Factor] Using user weights: {args.weights}")
-        return dict((k.strip(), float(v)) for k, v in (item.split("=") for item in args.weights.split(",")))
-
-    if hasattr(model, "get_weights"):
-        return model.get_weights(args.date)
-    if hasattr(model, "WEIGHTS"):
-        return model.WEIGHTS
-    raise ValueError("[ERROR] model has no weights")
 
 
 def print_factor_result(scored, weights, top_n, rank_corr):
@@ -56,72 +28,24 @@ def print_factor_result(scored, weights, top_n, rank_corr):
 
 
 def run_factor(args):
-    logger.info("=" * 50)
-    logger.info("[Factor] Start running factor pipeline")
-    total_start_time = time.time()
-
-    data_service = DataService()
-    factor_engine = FactorEngine(None)
-    scoring_engine = ScoringEngine()
-
-    universe = data_service.get_analysis_universe(limit=args.limit)
-    stock_list = universe.symbols
-    if not stock_list:
-        logger.error("[Factor] stock list is empty")
+    try:
+        result = run_factor_analysis(
+            date=args.date,
+            model_name=args.model,
+            top_n=args.top_n,
+            limit=args.limit,
+            user_weights=args.weights,
+        )
+    except ValueError as exc:
+        logger.error(str(exc))
         return
 
-    logger.info(f"[Factor] Universe size = {universe.size()}")
-    model = load_model(args.model)
-    weights = resolve_weights(args, model)
-    logger.info(f"[Factor] weights = {weights}")
-
-    date = pd.to_datetime(args.date)
-    cached_result = data_service.load_factor_analysis(
-        date=date,
-        model=args.model,
-        weights=weights,
-        top_n=args.top_n,
-        limit=args.limit,
-    )
-    if cached_result is not None:
+    logger.info("[Factor] Universe size = %s", result["universe_size"])
+    logger.info("[Factor] weights = %s", result["weights"])
+    if result["from_cache"]:
         logger.info("[Factor] Factor cache hit")
-        print_factor_result(cached_result["scored"], weights, args.top_n, cached_result["metadata"]["rank_corr"])
-        return
 
-    panel = data_service.get_analysis_factor_panel(stock_list, date, use_cache=True).panel
-    if panel is None or panel.empty:
-        logger.warning("[Factor] empty panel")
-        return
-
-    logger.info(f"[Factor] Panel shape = {panel.shape}")
-    panel = factor_engine.pipeline.run(panel.set_index("Date"), factors=list(weights.keys())).reset_index()
-    panel = factor_engine.handle_missing(panel, factors=list(weights.keys()))
-
-    snapshot = panel[panel["Date"] == date]
-    if snapshot.empty:
-        logger.warning("[Factor] snapshot is empty")
-        return
-
-    scored = scoring_engine.score(snapshot, weights)
-    rank_corr = compute_rank_corr(scored, target_col="score", factors=list(weights.keys()))
-    data_service.save_factor_analysis(
-        date=date,
-        model=args.model,
-        weights=weights,
-        top_n=args.top_n,
-        limit=args.limit,
-        scored=scored,
-        metadata={
-            "rank_corr": rank_corr,
-            "weights": weights,
-            "date": date.strftime("%Y-%m-%d"),
-            "model": args.model,
-        },
-    )
-    print_factor_result(scored, weights, args.top_n, rank_corr)
-
-    logger.info(f"[Factor] Done | total time: {time.time() - total_start_time:.4f}s")
-    logger.info("=" * 50)
+    print_factor_result(result["scored"], result["weights"], args.top_n, result["rank_corr"])
 
 
 def register(subparsers):

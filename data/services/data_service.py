@@ -74,6 +74,8 @@ class DataService:
         """[Boundary Warning] 获取因子分析所需 panel。
 
         这里统一封装 lookback 规则，避免命令层重复计算窗口长度。
+        当前保留该接口主要为了兼容旧调用点；
+        新的业务编排应优先在 application 层组合 `get_analysis_panel(...)`。
         """
         end = pd.to_datetime(date)
         start = end - pd.Timedelta(days=self.lookback_days)
@@ -129,6 +131,8 @@ class DataService:
 
         IC 需要额外的 forward return 计算空间，所以这里统一追加 buffer 天数，
         避免命令层重复处理日期扩展逻辑。
+        当前保留该接口主要为了兼容旧调用点；
+        新的业务编排应优先在 application 层组合 `get_analysis_panel(...)`。
         """
         end_with_buffer = pd.to_datetime(end) + pd.Timedelta(days=horizon * 3)
         return self.get_analysis_panel(
