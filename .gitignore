@@ -1,5 +1,11 @@
-# Python
+﻿# Python
 __pycache__/
+.pytest_cache/
+.pytest_tmp/
+.pytest_tmp*/
+pytest-cache-files-*/
+pytest_temp_runtracker_*/
+tmp*/
 *.py[cod]
 *$py.class
 *.so
@@ -18,6 +24,7 @@ build/
 *.swo
 
 # 数据与运行输出
+.tmp/
 data/datasets/raw/
 data/datasets/processed/
 data/datasets/cache/
