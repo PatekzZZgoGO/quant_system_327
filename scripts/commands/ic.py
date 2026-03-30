@@ -1,6 +1,6 @@
 import logging
 
-from application.shared.ic_app import run_ic_analysis
+from pipelines.ic_pipeline import run_ic_pipeline
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -16,7 +16,7 @@ def print_ic_result(ic_df, summary):
 
 def run_factor_ic(args):
     try:
-        result = run_ic_analysis(
+        result = run_ic_pipeline(
             start=args.start,
             end=args.end,
             horizon=args.horizon,

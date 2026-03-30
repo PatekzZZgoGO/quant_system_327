@@ -1,6 +1,6 @@
 import logging
 
-from application.shared.factor_app import run_factor_analysis
+from pipelines.factor_pipeline import run_factor_pipeline
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,7 +29,7 @@ def print_factor_result(scored, weights, top_n, rank_corr):
 
 def run_factor(args):
     try:
-        result = run_factor_analysis(
+        result = run_factor_pipeline(
             date=args.date,
             model_name=args.model,
             top_n=args.top_n,
