@@ -185,19 +185,19 @@ Status: complete
 
 ### Current Progress
 
-Status: in progress
+Status: complete
 
 已完成：
 
-- 已补充 `docs/research_asset_ownership.md`，形成 research asset ownership 初稿。
+- 已补充 `docs/research_asset_ownership.md`，形成 research asset ownership 正式说明。
 - `models/alpha/` 当前已明确更接近 `shared minimal alpha capability`。
 - `strategies/` 当前已明确更接近 `research implementation assets`。
-- 当前这部分 ownership 判断已经落文档，但后续仍需继续补强新增资产的落点规则。
+- 当前文档已补充新增资产落点规则，明确什么样的新模型应继续进入 `models/alpha/`，什么样的新策略实现应保留在 `strategies/`，以及何时应转为 `trading/runtime-specific`。
 
 结论：
 
-- Step 4 已从空白阶段推进到“ownership 初稿已固定”的状态。
-- 但当前更准确的阶段仍应记为 `in progress`；后续还需要把初稿分类提升为可持续复用的新增资产判断标准。
+- Step 4 已从“ownership 初稿已固定”推进到“分类规则与新增资产落点标准已固定”的状态。
+- 当前阶段可以将 Step 4 状态更新为 `complete`；后续即使继续新增 alpha / strategy 资产，也应按当前文档中已经明确的判断标准落位，而不再回到归属规则不清的状态。
 
 ## Step 5. Stabilize Shared Smoke Baseline
 
