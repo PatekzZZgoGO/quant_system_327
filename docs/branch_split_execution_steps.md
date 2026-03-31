@@ -291,6 +291,33 @@ Status: in progress
 - shared 改动可被快速验证。
 - trading 分支可以在 shared baseline 之上独立扩展自身测试。
 
+### Current Progress
+
+Status: in progress
+
+已完成：
+
+- 已补充 `docs/shared_test_strategy.md`，把当前 shared regression 的边界、范围与 smoke suite 目标写清楚。
+- 已形成一版可执行的 shared smoke baseline 初稿，当前建议纳入的最小测试集合包括：
+  - `tests/data/test_analysis_cache.py`
+  - `tests/data/test_data_app.py`
+  - `tests/pipelines/test_data_pipeline.py`
+  - `tests/utils/test_result_metadata.py`
+  - `tests/utils/test_run_tracker.py`
+  - `tests/backtest/test_backtest_engine.py`
+- 当前这组 baseline 已能覆盖 shared data/cache path、shared application/pipeline 轻量主链、metadata / run tracker 与 shared backtest analysis loop。
+
+仍未完全完成：
+
+- factor pipeline 主链与 IC pipeline 主链还缺更显式的 smoke test，目前仅有部分间接覆盖。
+- `tests/data/test_loaders.py`、`tests/data/test_processing.py` 当前尚未形成可纳入 smoke suite 的最小有效测试。
+- shared smoke suite 目前已形成初稿，但尚未进一步固化为统一命令入口或更正式的固定执行约定。
+
+结论：
+
+- Step 5 已从“已有测试基础但未收口”推进到“shared smoke baseline 初稿已形成”的状态。
+- 但从“shared baseline 已明确固定且覆盖 factor / IC 主链”的标准看，当前更准确的阶段仍应记为 `in progress`。
+
 ## Step 6. Final Pre-Split Review
 
 ### Goal

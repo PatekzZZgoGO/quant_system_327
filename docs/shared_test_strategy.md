@@ -43,6 +43,34 @@
 - `DataService` shared interface stability
 - basic backtest engine integration used by shared analysis path
 
+基于当前仓库中已经存在且较稳定的测试，现阶段建议先固定以下最小 smoke baseline：
+
+- `tests/data/test_analysis_cache.py`
+  - 覆盖 analysis cache round-trip、`DataService` 默认路径与 `UniverseProvider` 缓存行为。
+- `tests/data/test_data_app.py`
+  - 覆盖 shared data application 层的结构化结果输出与轻量编排。
+- `tests/pipelines/test_data_pipeline.py`
+  - 覆盖 data pipeline 的包装行为与 run record 附着。
+- `tests/utils/test_result_metadata.py`
+  - 覆盖共享 metadata helper 的稳定输出。
+- `tests/utils/test_run_tracker.py`
+  - 覆盖 run tracker 生命周期与 factor / ic pipeline 的 run record 附着行为。
+- `tests/backtest/test_backtest_engine.py`
+  - 覆盖 shared backtest analysis loop 的最小闭环，并验证 backtest 主路径通过共享分析输入接口取数。
+
+当前这组 smoke baseline 已能覆盖：
+
+- shared data/cache path
+- shared application/pipeline 轻量主链
+- metadata / run tracker
+- shared backtest analysis loop
+
+当前仍待后续补齐但尚未纳入最小 smoke baseline 的方向包括：
+
+- factor pipeline 主链的更显式 smoke test
+- IC pipeline 主链的更显式 smoke test
+- 更细粒度的 loader / processing 最小有效测试
+
 这一层测试应尽量满足：
 
 - 运行快
