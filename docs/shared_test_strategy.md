@@ -1,56 +1,53 @@
-# Shared Regression Test Strategy
+﻿# Shared Regression Test Strategy
 
 ## Purpose
 
-本文档用于定义当前仓库中 `shared regression tests` 的策略边界。
+本文档用于定义当前仓库中的 `shared regression tests` 边界。
 
-当前目标不是提升全面测试覆盖率，也不是重写现有测试框架。
-本阶段的重点是：
-
-1. 基于当前仓库现状识别共享主干已有的测试基础；
-2. 定义一组最小且稳定的 `shared smoke suite`；
-3. 明确哪些测试当前应纳入 shared regression scope，哪些暂时不纳入。
+当前目标不是追求高覆盖率，也不是重写现有测试体系，而是先固定一套最小、稳定、可快速执行的 `shared smoke suite`，作为 shared 主干的基础回归入口。
 
 ## Current Test Baseline
 
-结合当前测试目录现状，shared tests 当前主要以以下几类为核心：
+当前 shared 测试基础主要集中在以下几类：
 
-- `data`
-- `features`
-- shared backtest analysis capability
-- shared adapters capability
+- `tests/data`
+- `tests/pipelines`
+- `tests/utils`
+- `tests/backtest`
 
-其中现状并不完全均衡：
+其中已经形成较稳定基础的方向包括：
 
-- `tests/data` 当前已经有一部分真实有效测试；
-- `tests/backtest` 当前已有最小回测闭环测试，可视为 shared backtest analysis capability 的基础；
-- `tests/features` 当前仍较轻；
-- `tests/adapters` 方向正确，但当前基础仍较薄。
-
-因此，shared regression 的建设应以“已有基础 + 少量关键补位”为主，而不是大规模扩张。
+- analysis cache / shared data path
+- shared application / pipeline 轻量主链
+- metadata / run tracker
+- shared backtest analysis loop
 
 ## Shared Smoke Suite
 
-`shared smoke suite` 应小而稳、快速执行。
+`shared smoke suite` 应满足以下特点：
 
-它的目标不是覆盖所有边界情况，而是优先验证共享主干是否仍然可用。
+- 小而稳
+- 快速执行
+- 依赖少
+- 不强依赖本地缓存状态
+- 失败后易定位
 
-当前最适合纳入 `shared smoke suite` 的范围包括：
-
-- loader read path
-- panel assembly / alignment correctness
-- analysis cache stability
-- `DataService` shared interface stability
-- basic backtest engine integration used by shared analysis path
-
-基于当前仓库中已经存在且较稳定的测试，现阶段建议先固定以下最小 smoke baseline：
+当前固定纳入 shared smoke baseline 的最小测试集合为：
 
 - `tests/data/test_analysis_cache.py`
   - 覆盖 analysis cache round-trip、`DataService` 默认路径与 `UniverseProvider` 缓存行为。
 - `tests/data/test_data_app.py`
   - 覆盖 shared data application 层的结构化结果输出与轻量编排。
+- `tests/data/test_loaders.py`
+  - 覆盖 panel loader 拼装与 universe loader 的最小有效读取路径。
+- `tests/data/test_processing.py`
+  - 覆盖价格/基本面对齐与 future return 计算这两条最小 processing 主链。
 - `tests/pipelines/test_data_pipeline.py`
   - 覆盖 data pipeline 的包装行为与 run record 附着。
+- `tests/pipelines/test_factor_pipeline.py`
+  - 覆盖 factor pipeline 对 shared application 结果的包装与 run record 附着。
+- `tests/pipelines/test_ic_pipeline.py`
+  - 覆盖 IC pipeline 对 shared application 结果的包装与 run record 附着。
 - `tests/utils/test_result_metadata.py`
   - 覆盖共享 metadata helper 的稳定输出。
 - `tests/utils/test_run_tracker.py`
@@ -58,44 +55,39 @@
 - `tests/backtest/test_backtest_engine.py`
   - 覆盖 shared backtest analysis loop 的最小闭环，并验证 backtest 主路径通过共享分析输入接口取数。
 
-当前这组 smoke baseline 已能覆盖：
+这组 smoke baseline 当前已能覆盖：
 
 - shared data/cache path
-- shared application/pipeline 轻量主链
+- loader / processing 最小有效链路
+- factor / ic / data pipeline 主链包装层
 - metadata / run tracker
 - shared backtest analysis loop
 
-当前仍待后续补齐但尚未纳入最小 smoke baseline 的方向包括：
+## Execution Entry
 
-- factor pipeline 主链的更显式 smoke test
-- IC pipeline 主链的更显式 smoke test
-- 更细粒度的 loader / processing 最小有效测试
+当前将以下命令固定为 shared smoke suite 的统一执行入口：
 
-这一层测试应尽量满足：
+```bash
+python -m pytest --basetemp D:\quant_system_327\tmp_pytest_smoke tests/data/test_analysis_cache.py tests/data/test_data_app.py tests/data/test_loaders.py tests/data/test_processing.py tests/pipelines/test_data_pipeline.py tests/pipelines/test_factor_pipeline.py tests/pipelines/test_ic_pipeline.py tests/utils/test_result_metadata.py tests/utils/test_run_tracker.py tests/backtest/test_backtest_engine.py
+```
 
-- 运行快
-- 依赖少
-- 输出稳定
-- 问题定位直接
+这条命令应作为 shared 主干最小回归入口使用。后续扩展 shared regression scope 时，应先保证这条 smoke 命令持续稳定。
 
 ## Shared Regression Scope
 
-`shared regression scope` 可以在 `smoke suite` 基础上逐步扩展。
+`shared regression scope` 可以在 `shared smoke suite` 基础上继续扩展，但应优先围绕以下路径推进：
 
-建议优先围绕以下方向逐步补齐：
-
-- loader 正常读数据
-- panel 拼装与对齐稳定
-- cache key 与 cache round-trip 稳定
-- `DataService` 核心接口返回结构稳定
-- 日期扩展 / lookback / buffer 逻辑稳定
-- shared backtest analysis 闭环稳定
-- shared adapters 最小兼容能力稳定
+- loader 正常读取路径
+- panel 拼装与对齐稳定性
+- cache key 与 cache round-trip 稳定性
+- `DataService` 核心共享接口稳定性
+- 日期扩展 / lookback / buffer 规则稳定性
+- shared backtest analysis 闭环稳定性
 
 也就是说：
 
-- `smoke suite` 负责最小可用性验证；
-- `regression scope` 负责在此基础上逐步扩展共享主干回归保护面。
+- `smoke suite` 负责最小可用性验证
+- `regression scope` 负责在此基础上逐步补强 shared 主干回归保护
 
 ## Out-of-Scope Test Areas
 
@@ -113,33 +105,20 @@
 - `tests/portfolio`
 - `tests/risk`
 - `tests/strategies`
-- 未来只服务 signal / explain / content / daily product 的测试
-
-这些测试当前不应并入 `shared regression suite`，原因是：
-
-- 它们更强依赖 product / trading 上下文；
-- 它们的演进节奏不同于共享主干；
-- 如果过早混入 shared suite，会让共享回归测试变得不稳定、边界不清晰。
+- 未来只服务于 product / trading 分支的测试
 
 ## Migration Principles
 
-后续如果推进 shared regression 建设，应遵循以下原则：
+后续如继续推进 shared regression 建设，应遵循以下原则：
 
-1. 先定义 shared smoke suite，再逐步扩 shared regression scope。
-2. 优先覆盖共享主干最核心、最稳定、最容易退化的路径。
-3. 不把 branch-specific 测试提前塞进 shared suite。
-4. 新增 shared regression 测试时，优先保持测试小、稳定、可快速执行。
-5. 对当前仍是空壳或预留目录的测试区，应先补最小有效测试，再考虑纳入 shared suite。
+1. 先固定 `shared smoke suite`，再逐步扩展 `shared regression scope`。
+2. 优先覆盖 shared 主干最核心、最稳定、最容易退化的路径。
+3. 不把 branch-specific 测试提前混入 shared suite。
+4. 新增 shared regression 测试时，优先保持测试小、稳、快。
+5. 对当前仍为空壳或预留目录的测试区，先补最小有效测试，再考虑纳入 shared suite。
 
 ## Compatibility Notes
 
-当前 shared tests 仍处于“逐步成型”阶段，而不是完整稳定体系。
+当前 shared tests 仍处在逐步成型阶段，而不是完整成熟体系。
 
-因此当前阶段需要接受以下兼容事实：
-
-- `tests/data` 是现阶段最重要的 shared test 基础；
-- `tests/backtest` 只纳入 shared backtest analysis capability；
-- `tests/features` 和 `tests/adapters` 当前仍需逐步补强；
-- `execution / portfolio / risk / strategies / product-only tests` 暂不纳入 shared suite。
-
-当前 shared regression 的目标不是做大，而是先做稳。
+因此当前阶段的重点不是“做大”，而是先把 shared baseline 做稳。
