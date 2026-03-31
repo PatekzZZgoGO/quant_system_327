@@ -164,6 +164,30 @@ Status: nearly complete
   - 哪些可以抽到 shared
 - 后续切分分支时，`backtest/` 不会继续无边界扩张。
 
+### Current Progress
+
+Status: in progress
+
+已完成：
+
+- 已补充 `docs/backtest_ownership.md`，对 `backtest/` 当前的 ownership 做了第一版正式说明。
+- 当前已明确 `backtest/` 整体仍保持为 `boundary-controlled`，不直接整体划归 `shared` 或 `trading`。
+- 已完成一轮按文件的初步分类：
+  - `backtest/analysis/result_analyzer.py` 作为 shared analysis capability 候选
+  - `backtest/simulation/execution_model.py` 与 `backtest/simulation/portfolio_manager.py` 作为 trading/runtime-specific 候选
+  - `backtest/engine/backtest_engine.py`、`backtest/simulation/signal_generator.py`、`backtest/simulation/pnl_calculator.py` 当前保留为 boundary-controlled 组件
+
+仍未完全完成：
+
+- 当前仍是 ownership 初稿，尚未进一步把 `backtest/` 内部的 engine / simulation / output 边界细化到更稳定的演进规则。
+- `backtest/` 下哪些能力未来真正迁往 trading、哪些继续沉淀为 shared analysis，目前仍停留在第一版分类判断，尚未进入后续代码收口动作。
+- `backtest/results/` 与更广义的 storage / trading output 边界关系还未完全展开说明。
+
+结论：
+
+- Step 3 已从“问题识别阶段”推进到“ownership 初稿已落文档”的状态。
+- 但当前更准确的阶段仍应记为 `in progress`，后续还需要继续把初步分类转化为更稳定的边界规则与迁移策略。
+
 ## Step 4. Clarify Research Asset Ownership
 
 ### Goal
