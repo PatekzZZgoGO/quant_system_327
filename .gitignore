@@ -32,7 +32,8 @@ backtest/results/runs/*/
 !backtest/results/runs/.gitkeep
 logs/
 live/
-cache/
+/cache/
+data/cache/
 *.log
 
 # 环境变量

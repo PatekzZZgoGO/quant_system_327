@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.common.config import APP_CONFIG
-from data.cache.analysis_cache import AnalysisCache
+from data.providers.cache.analysis_cache import AnalysisCache
 from data.loaders.universe_loader import UniverseLoader
 from data.providers.universe_provider import UniverseProvider
 from data.services.data_service import DataService

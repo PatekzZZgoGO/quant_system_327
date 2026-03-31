@@ -1,6 +1,6 @@
 from typing import Optional
 
-from data.cache.analysis_cache import AnalysisCache
+from data.providers.cache.analysis_cache import AnalysisCache
 from data.loaders.universe_loader import UniverseLoader
 
 

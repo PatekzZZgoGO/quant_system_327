@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from data.cache.analysis_cache import AnalysisCache
+from data.providers.cache.analysis_cache import AnalysisCache
 from data.loaders.panel_loader import PanelLoader
 from data.processors.cleaner_processor import clean_market_data
 from data.domains.market_domain import Market

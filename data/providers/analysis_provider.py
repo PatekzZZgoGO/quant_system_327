@@ -2,7 +2,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import pandas as pd
 
-from data.cache.analysis_cache import AnalysisCache
+from data.providers.cache.analysis_cache import AnalysisCache
 
 
 class AnalysisProvider:
