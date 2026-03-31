@@ -57,23 +57,24 @@
 
 ### Current Progress
 
-Status: partially complete
+Status: complete
 
 已完成：
 
 - `factor`、`ic`、`backtest` 的业务编排已优先下沉到 `pipelines/`，其中 `factor` 与 `ic` 已进一步下沉到 `application/shared/`。
+- `data` 命令已补齐与 `factor` / `ic` / `backtest` 一致的 `command -> pipeline -> application` 下沉模式，不再由 `scripts/commands/data.py` 直接承担日期范围解析、批量更新编排与缓存状态统计等业务逻辑。
 - `run.py` 已明确为统一入口与分发层。
-- 入口层职责说明已补充到 `run.py` 与相关命令文件。
-
-仍未完全完成：
-
-- `data` 命令仍保留较多直接入口逻辑，尚未像 `factor`、`ic`、`backtest` 一样形成清晰的 pipeline/application 下沉。
-- `scripts/commands/` 当前主要依赖约定与文档来防止新逻辑回流，尚未形成更强的结构性限制。
+- 入口层职责说明已补充到 `run.py` 与相关命令文件，当前 command 层的剩余职责限定为参数注册、pipeline 调用与结果输出。
+- 现有四个命令的当前状态已可明确登记为：
+  - `data`: 已下沉到 pipeline/application
+  - `factor`: 薄入口
+  - `ic`: 薄入口
+  - `backtest`: 薄入口
 
 结论：
 
-- Step 1 已完成大部分目标，足以支撑继续推进后续步骤。
-- 但从“完全解决诉求”的标准看，当前状态更准确地应记为 `partially complete`。
+- Step 1 的主要收口目标已完成，旧入口层继续吸收新能力的主要回流点已经从 `scripts/commands/` 收敛到 `pipelines/` 与 `application/shared/`。
+- 当前阶段可以将 Step 1 状态更新为 `complete`，后续若再新增命令或入口能力，应继续遵守“命令层保持薄入口”的约束，而不是回流到旧命令文件中。
 
 ## Step 2. Constrain DataService Boundary
 
