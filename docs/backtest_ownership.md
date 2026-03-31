@@ -26,6 +26,49 @@
 
 因此，当前阶段不应把整个 `backtest/` 直接整体划归 `shared` 或 `trading`，而应在目录内部进一步拆分 ownership。
 
+## Subdirectory Boundary
+
+### `backtest/analysis/`
+
+当前更接近：
+
+- `shared analysis capability`
+
+原因是这里主要承载结果统计、分析口径和研究结果汇总，而不是执行状态机或交易运行时控制逻辑。
+
+### `backtest/engine/`
+
+当前更接近：
+
+- `boundary-controlled orchestration`
+
+原因是这里负责把共享分析输入、因子计算、信号生成、调仓执行、PnL 统计与结果汇总串成一条完整回测链路。
+
+它不适合直接视为 shared 主干，因为其内部仍然混合了运行时语义；也不适合直接整体迁往 trading，因为它仍承接研究验证主链。
+
+### `backtest/simulation/`
+
+当前更接近：
+
+- `mixed boundary with runtime-heavy internals`
+
+更具体地说：
+
+- `execution_model.py`、`portfolio_manager.py` 明显偏 trading/runtime
+- `signal_generator.py`、`pnl_calculator.py` 当前仍属于边界层桥接组件
+
+因此 `simulation/` 当前不应整体打包迁移，而应按文件继续拆分 ownership。
+
+### `backtest/results/`
+
+当前更接近：
+
+- `boundary-controlled output path`
+
+它承接的是当前回测兼容输出路径，而不是稳定的 shared storage 主干。
+
+结合 [storage_partitioning.md](/D:/quant_system_327/docs/storage_partitioning.md) 的分区方向，`backtest/results/runs/` 后续更接近迁往 `storage/trading_system/backtests/`，而不是进入 `storage/shared/`。
+
 ## Ownership Categories
 
 ### Shared Analysis Capability
@@ -74,6 +117,7 @@
   - 当前是兼容性的回测结果输出目录。
   - 这里承接历史输出路径，但不应被误判为 shared 主干目录。
   - 当前建议继续按 boundary-controlled output path 处理。
+  - 后续更接近迁往 `storage/trading_system/backtests/`，而不是迁入 `storage/shared/`。
 
 ### Trading/Runtime-Specific Capability
 
@@ -94,6 +138,33 @@
 - `simulation/execution_model.py` 与 `simulation/portfolio_manager.py` 是最明确的 trading/runtime 候选
 - `engine/backtest_engine.py`、`simulation/signal_generator.py`、`simulation/pnl_calculator.py` 当前仍属于过渡期边界组件
 
+进一步地，当前可以把未来迁移优先级明确为：
+
+- 优先迁往 `trading/runtime`
+  - `backtest/simulation/execution_model.py`
+  - `backtest/simulation/portfolio_manager.py`
+  - `backtest/results/runs/` 对应的结果输出路径
+
+- 更可能继续沉淀为 `shared analysis`
+  - `backtest/analysis/result_analyzer.py`
+
+- 当前继续保留为 `boundary-controlled`
+  - `backtest/engine/backtest_engine.py`
+  - `backtest/simulation/signal_generator.py`
+  - `backtest/simulation/pnl_calculator.py`
+
+这意味着当前阶段不再只是“先分三类”，而是已经可以对后续迁移方向给出稳定优先级判断。
+
+## Migration Principles
+
+后续如果继续推进 `backtest/` ownership 收口，应遵循以下原则：
+
+1. 先按文件和子目录明确迁移优先级，再考虑真实目录迁移。
+2. `analysis/` 内结果汇总与统计口径优先朝 shared analysis 收敛。
+3. `simulation/` 中执行、持仓、成本相关组件优先朝 trading/runtime 收敛。
+4. `engine/` 继续作为受控边界编排层保留，直到其中可分离的 shared / trading 组件进一步稳定。
+5. `backtest/results/` 当前继续兼容现有输出路径，但目标方向应优先对齐 `storage/trading_system/backtests/`，而不是误归类为 shared storage。
+
 ## Do Not Do Yet
 
 - 不把整个 `backtest/` 一次性整体迁到 `shared`。
@@ -109,6 +180,7 @@
 - 可以明确说清哪些当前保留为 boundary-controlled
 - 可以明确说清哪些未来优先下沉 trading/runtime
 - 后续切分 `shared` / `trading` 分支时，不再以整个 `backtest/` 作为单一整体处理
+- 可以明确说清 `backtest/results/` 与更广义 storage / trading output 的关系
 
 ## Summary
 
@@ -117,4 +189,5 @@
 - `backtest/` 当前整体仍应视为 `boundary-controlled`
 - 其中 `result_analyzer.py` 是最明确的 shared analysis 候选
 - `execution_model.py` 与 `portfolio_manager.py` 是最明确的 trading/runtime-specific 候选
-- 其余主链文件当前先保留在受控边界内，待后续边界进一步稳定后再继续下沉
+- `backtest/results/runs/` 当前继续兼容现有输出路径，但后续更接近 `storage/trading_system/backtests/`
+- 其余主链文件当前先保留在受控边界内，并按文档中给出的迁移优先级逐步收口

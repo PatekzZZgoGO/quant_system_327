@@ -110,7 +110,7 @@ Status: complete
 
 ### Current Progress
 
-Status: nearly complete
+Status: complete
 
 已完成：
 
@@ -118,16 +118,13 @@ Status: nearly complete
 - `factor`、`ic` 的主路径已优先在 application 层组织场景规则，再调用共享分析输入接口。
 - `backtest` 主路径已从 `get_analysis_backtest_panel(...)` 切回通用的 `get_analysis_panel(...)`，execution delay / buffer 规则不再继续作为 `DataService` 的主推荐职责。
 - `docs/data_service_boundary.md` 已同步记录当前共享边界、兼容接口与收口原则。
-
-仍未完全完成：
-
-- `DataService` 中仍保留 `get_analysis_factor_panel(...)`、`get_analysis_backtest_panel(...)`、`get_analysis_ic_panel(...)` 及对应旧别名，当前主要作为兼容层存在，尚未完全退出代码面。
-- 兼容层虽然已经明确标成 boundary warning，但还没有进一步收缩到更强的结构性限制，例如统一的弃用策略或彻底移除旧调用方。
+- `DataService` 中的旧场景化接口与旧别名接口已经补充 `DeprecationWarning`，退场策略从纯注释约束推进到运行时提示。
+- 已完成一轮调用点清点，确认 factor / ic / backtest 主路径都不再依赖 `get_analysis_factor_panel(...)`、`get_analysis_backtest_panel(...)`、`get_analysis_ic_panel(...)` 及对应旧别名来组织场景规则。
 
 结论：
 
-- Step 2 的主收口方向已经基本落地，`DataService` 作为 shared data facade 的边界比之前清晰得多。
-- 但从“兼容层已彻底退出主路径”的标准看，当前状态更准确地应记为 `nearly complete`，后续仍需继续处理旧接口的长期退场策略。
+- Step 2 的主收口目标已经完成，`DataService` 作为 shared data facade 的边界、主路径与兼容层退场策略都已固定。
+- 当前阶段可以将 Step 2 状态更新为 `complete`；后续即使旧接口因兼容性暂时保留，也不再影响 Step 2 对“主路径已完成收口”的判断。
 
 ## Step 3. Clarify Backtest Ownership
 
@@ -166,7 +163,7 @@ Status: nearly complete
 
 ### Current Progress
 
-Status: in progress
+Status: complete
 
 已完成：
 
@@ -176,17 +173,13 @@ Status: in progress
   - `backtest/analysis/result_analyzer.py` 作为 shared analysis capability 候选
   - `backtest/simulation/execution_model.py` 与 `backtest/simulation/portfolio_manager.py` 作为 trading/runtime-specific 候选
   - `backtest/engine/backtest_engine.py`、`backtest/simulation/signal_generator.py`、`backtest/simulation/pnl_calculator.py` 当前保留为 boundary-controlled 组件
-
-仍未完全完成：
-
-- 当前仍是 ownership 初稿，尚未进一步把 `backtest/` 内部的 engine / simulation / output 边界细化到更稳定的演进规则。
-- `backtest/` 下哪些能力未来真正迁往 trading、哪些继续沉淀为 shared analysis，目前仍停留在第一版分类判断，尚未进入后续代码收口动作。
-- `backtest/results/` 与更广义的 storage / trading output 边界关系还未完全展开说明。
+- 已进一步细化 `engine / simulation / results` 三层边界，并明确 `backtest/results/runs/` 后续更接近对齐 `storage/trading_system/backtests/`。
+- 已给出未来迁移优先级，明确哪些组件优先迁往 trading/runtime，哪些更可能继续沉淀为 shared analysis，哪些继续保留为 boundary-controlled。
 
 结论：
 
-- Step 3 已从“问题识别阶段”推进到“ownership 初稿已落文档”的状态。
-- 但当前更准确的阶段仍应记为 `in progress`，后续还需要继续把初步分类转化为更稳定的边界规则与迁移策略。
+- Step 3 的 ownership 说明已经从初步分类推进到更稳定的边界规则与迁移优先级判断。
+- 当前阶段可以将 Step 3 状态更新为 `complete`，后续若继续调整 backtest 代码或结果路径，应遵守当前文档中已经固定的 ownership 与迁移方向，而不是重新回到整块目录归属不清的状态。
 
 ## Step 4. Clarify Research Asset Ownership
 

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import warnings
 
 import pandas as pd
 
@@ -46,10 +47,22 @@ class DataService:
         self.universe_loader = UniverseLoader(self.data_dir)
         self.universe_provider = UniverseProvider(self.universe_loader)
 
+    def _warn_legacy_interface(self, interface_name: str) -> None:
+        warnings.warn(
+            (
+                f"{interface_name}() is a legacy DataService compatibility interface. "
+                "New orchestration should compute scenario-specific rules at the "
+                "application/engine layer and call get_analysis_panel(...)."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # ------------------------------------------------------------------
     # Shared Analysis Input Access
     # ------------------------------------------------------------------
 
+    # Preferred shared entry for new orchestration.
     def get_analysis_panel(self, symbols, start, end, use_cache=True, cache_extras=None):
         """[Shared Analysis Input Access] 获取通用分析 panel。
 
@@ -74,6 +87,7 @@ class DataService:
     # New orchestration should compute lookback at the application layer and
     # then call get_analysis_panel(...).
     def get_analysis_factor_panel(self, symbols, date, use_cache=True):
+        self._warn_legacy_interface("get_analysis_factor_panel")
         """[Boundary Warning] 获取因子分析所需 panel。
 
         这里统一封装 lookback 规则，避免命令层重复计算窗口长度。
@@ -94,6 +108,7 @@ class DataService:
     # New orchestration should compute execution-delay/buffer at the upper layer
     # and then call get_analysis_panel(...).
     def get_analysis_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
+        self._warn_legacy_interface("get_analysis_backtest_panel")
         """[Boundary Warning] 获取回测分析所需 panel。
 
         回测需要在结束日期后额外保留一小段缓冲区间，
@@ -136,6 +151,7 @@ class DataService:
     # New orchestration should compute horizon buffer at the application layer
     # and then call get_analysis_panel(...).
     def get_analysis_ic_panel(self, symbols, start, end, horizon, use_cache=True):
+        self._warn_legacy_interface("get_analysis_ic_panel")
         """[Boundary Warning] 获取 IC 分析所需 panel。
 
         IC 需要额外的 forward return 计算空间，所以这里统一追加 buffer 天数，
@@ -195,11 +211,13 @@ class DataService:
 
     # Legacy alias: do not use as a new entry point.
     def get_factor_panel(self, symbols, date, use_cache=True):
+        self._warn_legacy_interface("get_factor_panel")
         """[Boundary Warning] 兼容旧接口，获取 factor 场景 panel。"""
         return self.get_analysis_factor_panel(symbols, date, use_cache=use_cache)
 
     # Legacy alias: do not use as a new entry point.
     def get_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
+        self._warn_legacy_interface("get_backtest_panel")
         """[Boundary Warning] 兼容旧接口，获取 backtest 场景 panel。"""
         return self.get_analysis_backtest_panel(
             symbols,
@@ -219,6 +237,7 @@ class DataService:
 
     # Legacy alias: do not use as a new entry point.
     def get_ic_panel(self, symbols, start, end, horizon, use_cache=True):
+        self._warn_legacy_interface("get_ic_panel")
         """[Boundary Warning] 兼容旧接口，获取 IC 场景 panel。"""
         return self.get_analysis_ic_panel(symbols, start, end, horizon, use_cache=use_cache)
 
