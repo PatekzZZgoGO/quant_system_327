@@ -225,6 +225,31 @@ Status: in progress
   - trading/runtime 相关资产
 - 分支切出后，不会因为归属不明产生频繁双向复制或反复搬迁。
 
+### Current Progress
+
+Status: in progress
+
+已完成：
+
+- 已补充 `docs/research_asset_ownership.md`，对 `models/alpha/` 与 `strategies/` 当前的 ownership 做了第一版正式说明。
+- 当前已明确：
+  - `models/alpha/` 中现有轻量模型更接近 shared minimal alpha capability
+  - `strategies/` 当前整体更接近 research implementation assets
+- 已完成一轮按文件的初步分类：
+  - `models/alpha/simple_alpha.py`、`models/alpha/momentum_only.py`、`models/alpha/low_vol.py` 作为 shared minimal alpha capability 候选
+  - `strategies/*/strategy.py` 与对应 `config.yaml` 作为 research implementation assets
+
+仍未完全完成：
+
+- 当前仍是 ownership 初稿，尚未进一步定义当 `models/alpha/` 出现更重的实验实现或产品化模型时应如何重新划分边界。
+- `strategies/` 中未来若继续长出 execution / account / live event / 风控耦合逻辑，哪些应转入 trading/runtime-specific，目前还未形成更细的迁移规则。
+- 当前在 `models/alpha/` 与 `strategies/` 中还没有特别明确的 trading/runtime-specific 主体，这部分判断仍需随着实现演进继续更新。
+
+结论：
+
+- Step 4 已从空白阶段推进到 ownership 初稿已落文档的状态。
+- 但当前更准确的阶段仍应记为 `in progress`，后续还需要继续把初步分类转化为更稳定的判断标准与演进规则。
+
 ## Step 5. Stabilize Shared Smoke Baseline
 
 ### Goal
