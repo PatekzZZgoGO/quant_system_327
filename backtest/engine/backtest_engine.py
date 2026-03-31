@@ -35,12 +35,13 @@ class BacktestEngine:
 
     def _prepare_panel(self, symbols, start, end, execution_delay: int, use_cache: bool) -> pd.DataFrame:
         """取回测所需 panel，并统一整理日期字段。"""
-        market = self.data_service.get_analysis_backtest_panel(
+        end_with_buffer = pd.to_datetime(end) + pd.Timedelta(days=max(execution_delay, 1) * 3)
+        market = self.data_service.get_analysis_panel(
             symbols=symbols,
             start=start,
-            end=end,
-            execution_delay=execution_delay,
+            end=end_with_buffer,
             use_cache=use_cache,
+            cache_extras={"execution_delay": execution_delay, "analysis": "backtest"},
         )
         panel = market.panel.copy()
         if panel is None or panel.empty:

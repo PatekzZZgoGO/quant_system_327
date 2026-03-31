@@ -111,6 +111,25 @@
 4. 兼容旧接口可以短期保留，但不应继续作为新增能力的承载点。
 5. `DataService` 的增长方向应是“更稳定的共享访问语义”，而不是“更多场景特例入口”。
 
+## Current Progress
+
+当前围绕 `DataService` 边界的收口已取得阶段性进展：
+
+- `DataService` 中的接口已经按 shared raw data access、shared analysis input access、legacy / boundary warning 三组明确标注。
+- `factor` 与 `ic` 的主编排路径已经优先在 application 层组织 lookback / horizon buffer 规则，再调用 `get_analysis_panel(...)` 这类共享入口。
+- `backtest` 的主路径已改为在上层组织 execution delay / buffer 规则后调用 `get_analysis_panel(...)`，不再继续依赖 `get_analysis_backtest_panel(...)` 作为主编排入口。
+
+当前仍保留但已明确降级为兼容层的接口包括：
+
+- `get_analysis_factor_panel(...)`
+- `get_analysis_backtest_panel(...)`
+- `get_analysis_ic_panel(...)`
+- `get_factor_panel(...)`
+- `get_backtest_panel(...)`
+- `get_ic_panel(...)`
+
+这些接口短期内可以继续存在，以承接旧调用或减轻一次性迁移成本；但后续新增编排逻辑不应再继续依赖它们。
+
 简而言之：
 
 - `DataService` 当前是共享数据门面；

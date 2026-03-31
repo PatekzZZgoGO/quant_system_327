@@ -13,6 +13,7 @@ class StubDataService:
 
     def __init__(self, panel: pd.DataFrame):
         self._panel = panel.copy()
+        self.last_analysis_request = None
 
     def get_analysis_universe(self, limit=None, use_cache=True):
         symbols = sorted(self._panel["Symbol"].unique().tolist())
@@ -20,7 +21,14 @@ class StubDataService:
             symbols = symbols[:limit]
         return Universe(symbols)
 
-    def get_analysis_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
+    def get_analysis_panel(self, symbols, start, end, use_cache=True, cache_extras=None):
+        self.last_analysis_request = {
+            "symbols": list(symbols),
+            "start": start,
+            "end": end,
+            "use_cache": use_cache,
+            "cache_extras": cache_extras,
+        }
         panel = self._panel[self._panel["Symbol"].isin(symbols)].copy()
         return Market(panel)
 
@@ -48,8 +56,9 @@ def _sample_panel():
 
 def test_backtest_engine_builds_factor_to_pnl_loop():
     panel = _sample_panel()
+    data_service = StubDataService(panel)
     engine = BacktestEngine(
-        data_service=StubDataService(panel),
+        data_service=data_service,
         factor_engine=FactorEngine(None),
         scoring_engine=ScoringEngine(),
         execution_model=ExecutionModel(commission_rate=0.0, slippage_rate=0.0),
@@ -80,6 +89,8 @@ def test_backtest_engine_builds_factor_to_pnl_loop():
     assert result["summary"].loc[0, "total_return"] > 0
     assert len(result["trades"]) >= 1
     assert set(result["positions"]["symbol"]) == {"AAA"}
+    assert data_service.last_analysis_request["cache_extras"] == {"execution_delay": 1, "analysis": "backtest"}
+    assert pd.to_datetime(data_service.last_analysis_request["end"]) == pd.Timestamp("2024-01-07")
 
 
 def test_backtest_engine_applies_turnover_costs():

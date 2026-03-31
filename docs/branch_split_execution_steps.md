@@ -108,6 +108,27 @@ Status: complete
 - 新需求不再推动它继续场景膨胀。
 - shared 分支未来可以直接承接这层 facade，而不引入 trading 反向污染。
 
+### Current Progress
+
+Status: nearly complete
+
+已完成：
+
+- `DataService` 的接口已按 shared raw data access、shared analysis input access、legacy / boundary warning 三组完成分组与注释。
+- `factor`、`ic` 的主路径已优先在 application 层组织场景规则，再调用共享分析输入接口。
+- `backtest` 主路径已从 `get_analysis_backtest_panel(...)` 切回通用的 `get_analysis_panel(...)`，execution delay / buffer 规则不再继续作为 `DataService` 的主推荐职责。
+- `docs/data_service_boundary.md` 已同步记录当前共享边界、兼容接口与收口原则。
+
+仍未完全完成：
+
+- `DataService` 中仍保留 `get_analysis_factor_panel(...)`、`get_analysis_backtest_panel(...)`、`get_analysis_ic_panel(...)` 及对应旧别名，当前主要作为兼容层存在，尚未完全退出代码面。
+- 兼容层虽然已经明确标成 boundary warning，但还没有进一步收缩到更强的结构性限制，例如统一的弃用策略或彻底移除旧调用方。
+
+结论：
+
+- Step 2 的主收口方向已经基本落地，`DataService` 作为 shared data facade 的边界比之前清晰得多。
+- 但从“兼容层已彻底退出主路径”的标准看，当前状态更准确地应记为 `nearly complete`，后续仍需继续处理旧接口的长期退场策略。
+
 ## Step 3. Clarify Backtest Ownership
 
 ### Goal

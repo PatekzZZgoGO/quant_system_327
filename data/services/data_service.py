@@ -70,6 +70,9 @@ class DataService:
         symbols = self.universe_provider.load_analysis_universe(limit=limit, use_cache=use_cache)
         return Universe(symbols)
 
+    # Legacy compatibility entry: keep for old factor callers only.
+    # New orchestration should compute lookback at the application layer and
+    # then call get_analysis_panel(...).
     def get_analysis_factor_panel(self, symbols, date, use_cache=True):
         """[Boundary Warning] 获取因子分析所需 panel。
 
@@ -87,6 +90,9 @@ class DataService:
             cache_extras={"lookback_days": self.lookback_days},
         )
 
+    # Legacy compatibility entry: keep for old backtest callers only.
+    # New orchestration should compute execution-delay/buffer at the upper layer
+    # and then call get_analysis_panel(...).
     def get_analysis_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
         """[Boundary Warning] 获取回测分析所需 panel。
 
@@ -126,6 +132,9 @@ class DataService:
             metadata=metadata,
         )
 
+    # Legacy compatibility entry: keep for old IC callers only.
+    # New orchestration should compute horizon buffer at the application layer
+    # and then call get_analysis_panel(...).
     def get_analysis_ic_panel(self, symbols, start, end, horizon, use_cache=True):
         """[Boundary Warning] 获取 IC 分析所需 panel。
 
@@ -184,10 +193,12 @@ class DataService:
     # Legacy / Boundary Warning
     # ------------------------------------------------------------------
 
+    # Legacy alias: do not use as a new entry point.
     def get_factor_panel(self, symbols, date, use_cache=True):
         """[Boundary Warning] 兼容旧接口，获取 factor 场景 panel。"""
         return self.get_analysis_factor_panel(symbols, date, use_cache=use_cache)
 
+    # Legacy alias: do not use as a new entry point.
     def get_backtest_panel(self, symbols, start, end, execution_delay=1, use_cache=True):
         """[Boundary Warning] 兼容旧接口，获取 backtest 场景 panel。"""
         return self.get_analysis_backtest_panel(
@@ -206,6 +217,7 @@ class DataService:
         """[Shared Analysis Input Access] 兼容旧接口，保存 factor 分析结果。"""
         self.save_factor_analysis(date, model, weights, top_n, limit, scored, metadata)
 
+    # Legacy alias: do not use as a new entry point.
     def get_ic_panel(self, symbols, start, end, horizon, use_cache=True):
         """[Boundary Warning] 兼容旧接口，获取 IC 场景 panel。"""
         return self.get_analysis_ic_panel(symbols, start, end, horizon, use_cache=use_cache)
