@@ -1,3 +1,13 @@
+"""Unified CLI entrypoint.
+
+This file stays as a thin compatibility entry layer during the shared/trading
+pre-split phase. It should remain focused on command discovery, registration,
+dispatch, and interactive argument collection.
+
+New business orchestration should prefer pipeline/application layers instead of
+growing directly in this file.
+"""
+
 import argparse
 import importlib
 import logging

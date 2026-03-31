@@ -1,3 +1,5 @@
+"""Compatibility command entry for shared data management."""
+
 from infra.config import config
 from data.ingestion.tushare_client import TushareDataFetcher
 

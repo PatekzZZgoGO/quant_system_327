@@ -1,3 +1,5 @@
+"""Compatibility command entry for shared factor analysis."""
+
 import logging
 
 from pipelines.factor_pipeline import run_factor_pipeline
@@ -28,6 +30,7 @@ def print_factor_result(scored, weights, top_n, rank_corr):
 
 
 def run_factor(args):
+    """Keep command responsibility limited to argument bridging and output."""
     try:
         result = run_factor_pipeline(
             date=args.date,

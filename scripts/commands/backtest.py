@@ -1,3 +1,5 @@
+"""Compatibility command entry for boundary-controlled backtest flows."""
+
 import pandas as pd
 
 from pipelines.backtest_pipeline import run_backtest_pipeline

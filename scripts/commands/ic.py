@@ -1,3 +1,5 @@
+"""Compatibility command entry for shared IC analysis."""
+
 import logging
 
 from pipelines.ic_pipeline import run_ic_pipeline
@@ -15,6 +17,7 @@ def print_ic_result(ic_df, summary):
 
 
 def run_factor_ic(args):
+    """Keep command responsibility limited to argument bridging and output."""
     try:
         result = run_ic_pipeline(
             start=args.start,
