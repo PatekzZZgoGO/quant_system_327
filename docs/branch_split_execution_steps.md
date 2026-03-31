@@ -271,7 +271,7 @@ Status: complete
 
 ### Goal
 
-鍦ㄦ寮忓垏 `shared` / `trading` 鍒嗘敮鍓嶏紝瀵瑰墠 5 姝ョ殑杈圭晫绾︽潫鍋氫竴娆＄粺涓€纭锛岄伩鍏嶅甫鐫€鏈敹鍙ｇ殑闂鐩存帴鍒囧垎銆?
+在正式切出 `shared` / `trading` 分支前，对前 5 步的边界约束做一次统一确认，避免带着未收口的问题直接切分。
 
 ### Scope
 
@@ -283,30 +283,50 @@ Status: complete
 
 ### Do First
 
-- 閫愰」纭 Step 1 鍒?Step 5 鐨?exit criteria 鏄惁婊¤冻銆?
-- 纭鏂板浠ｇ爜钀界偣瑙勫垯宸茬粡瀹為檯鐢熸晥銆?
-- 纭 shared / boundary / trading 鐨勫垎绫讳笉鍐嶅仠鐣欏湪鍙ｅご绾﹀畾銆?
-- 纭 shared smoke baseline 宸插彲绋冲畾浣滀负鍒囧垎鍚庨獙璇佸熀纭€銆?
+- 逐项确认 Step 1 到 Step 5 的 exit criteria 是否满足。
+- 确认新增代码落点规则已经实际生效。
+- 确认 shared / boundary / trading 的分类不再停留在口头约定。
+- 确认 shared smoke baseline 已可稳定作为切分后的基础验证入口。
 
 ### Do Not Do Yet
 
-- 涓嶅湪 exit criteria 鏈弧瓒虫椂浠撲績鍒囧垎鏀€?
-- 涓嶆妸鈥滃凡鏈夌洰褰曢鏋垛€濊鍒や负鈥滃凡缁忓畬鎴愯竟鐣屾敹鍙ｂ€濄€?
+- 不在 exit criteria 未满足时仓促切分分支。
+- 不把“已有目录骨架”误判为“已经完成边界收口”。
 
 ### Exit Criteria
 
-- Step 1 鍒?Step 5 宸插熀鏈畬鎴愩€?
-- 鍙互鍦ㄤ笉澶ц妯￠噸鍐欍€佷笉涓€娆℃€ф惉绌虹洰褰曠殑鍓嶆彁涓嬫寮忓垏鍑?`shared` / `trading` 鍒嗘敮銆?
-- 鍒囧垎涔嬪悗涓ゆ潯鍒嗘敮閮借兘鍦ㄦ槑纭竟鐣屼笅缁х画婕旇繘銆?
+- Step 1 到 Step 5 已基本完成。
+- 可以在不大规模重写、不一次性搬空目录的前提下正式切出 `shared` / `trading` 分支。
+- 切分之后两条分支都能在明确边界下继续演进。
+
+### Current Progress
+
+Status: complete
+
+已完成：
+
+- 已逐项复核 Step 1 到 Step 5 的 exit criteria，当前文档状态均已更新为 `complete`。
+- 入口层、`DataService`、`backtest/`、研究资产与 shared smoke baseline 的边界约束都已经从“方向说明”推进到“正式文档 + 最小实现/验证入口”。
+- `shared smoke suite` 已固定为明确的 pytest 执行入口，可作为切分后的最小 shared baseline。
+- 当前仓库已经具备在不大规模重写目录的前提下继续推进 `shared` / `trading` 分支切分的前置条件。
+
+结论：
+
+- Step 6 的 final pre-split review 已完成，当前阶段可以将 Step 6 状态更新为 `complete`。
+- 后续如果正式切分分支，应以当前文档中已经固定的边界、ownership 与 smoke baseline 作为默认约束，而不是重新回到边界未收口的状态。
 
 ## Split Readiness Gate
 
-褰撲互涓嬫潯浠跺叏閮ㄦ弧瓒虫椂锛屽彲浠ヨ涓轰粨搴撳凡缁忚揪鍒版寮忓垏 `shared` / `trading` 鍒嗘敮鐨勬渶浣庨棬妲涳細
+当以下条件全部满足时，可以认为仓库已经达到正式切 `shared` / `trading` 分支的最低门槛：
 
-- 鏂颁唬鐮佷笉鍐嶅洖娴佹棫鍛戒护灞傘€?
-- `DataService` 涓嶅啀缁х画鍦烘櫙鑶ㄨ儉銆?
-- `backtest/` 鐨?shared / boundary / trading 杈圭晫宸插啓娓呮銆?
-- `models/alpha/` 涓?`strategies/` 鐨勫綊灞炲師鍒欏凡鍐欐竻妤氥€?
-- shared smoke suite 鍙互绋冲畾鎵ц銆?
+- 新代码不再回流旧命令层。
+- `DataService` 不再继续场景膨胀。
+- `backtest/` 的 shared / boundary / trading 边界已写清楚。
+- `models/alpha/` 与 `strategies/` 的归属原则已写清楚。
+- shared smoke suite 可以稳定执行。
 
+### Current Status
 
+Status: passed
+
+依据当前 Step 1 到 Step 6 的复核结果，上述门槛已全部满足。
